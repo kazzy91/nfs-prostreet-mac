@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""test_x360_engine.py - the X360 engine-constant table (x360_engine.inc, tools_snapshot/pubtables_gen.py).
+
+The repository holds no retail numbers: brightness endpoints, shadow-fit tuning and rumble envelope/collision numbers are
+read from the player's default.xex at build time. This test needs no game bytes for its first part:
+  1. a synthetic image (every float 1.5) produces every macro the runtime uses, and only finite numbers;
+  2. the no-executable stub defines every macro too, with the port's own fallbacks for brightness and rumble, so the
+     runtime keeps working on the PC game (identity of the brightness slider stays inside its range);
+and, when the player's X360 default.xex is reachable (NFS_X360_XEX, else <x360 root>/default.xex from roots.txt, else
+beside a sibling x360/files), a second part:
+  3. the real executable yields numbers in plausible ranges (brightness low < 1 < high);
+  4. a copy with one byte changed is refused (no table is written from an executable that is not the supported build).
+Parts 1 and the controls run for the address tables of both supported builds (USA and the European PAL build); part 3
+uses the build the player's executable is.
+Exit 3 = part 3-4 skipped (no executable). Run: tools/.venv/bin/python -I tools_snapshot/test_x360_engine.py"""
+import math
+import os
+from pathlib import Path
+import re
+import struct
+import sys
+import tempfile
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import pubtables_gen as pg  # noqa: E402
+
+REQUIRED = {"X360E_BRIGHT_LOW", "X360E_BRIGHT_HIGH", "X360E_SHADOW_LIGHT_Z_MIN", "X360E_SHADOW_N_SCALE", "X360E_SHADOW_N_OFFSET",
+            "X360E_SHADOW_EYE_BACK", "X360E_SHADOW_Y_SCALE", "X360E_SHADOW_DEPTH_SCALE", "X360E_FB_HIT_SOFT", "X360E_FB_HIT_SLOPE",
+            "X360E_FB_WORLD_SLOPE", "X360E_FB_GROUND_SLOPE", "X360E_FB_SAME_DOT", "X360E_FB_RAMP_LO", "X360E_FB_RAMP_HI",
+            "X360E_FB_SHIFT_TIME", "X360E_FB_SHIFT_GOOD", "X360E_FB_SHIFT_PERFECT", "X360E_FB_NOS_TIME", "X360E_FB_NOS_END",
+            "X360E_FB_DAMAGE_END", "X360E_FB_GEAR_TIME", "X360E_FB_GEAR_LEVEL"}
+
+
+def macros(text):
+    return {m.group(1): m.group(2) for m in re.finditer(r"^#define (X360E_\w+) (\S+)$", text, re.M)}
+
+
+def number(t):
+    return float(t[:-1] if t.endswith("f") else t)
+
+
+LI_IMMEDIATE = 0x0123      # an arbitrary synthetic immediate (not any retail value)
+
+
+def layout(build):
+    """{name: (load site, lis address, register)} for the synthetic image: each lis in a free word below its site (never the
+    word right before a site, which the controls tamper with), and a register no other site uses between its lis and lfs."""
+    load_sites = pg.tables(build)[3]
+    taken = {a for site in load_sites.values() for a in (site, site - 4)} | {va for _, va in pg.tables(build)[2]}
+    out, spans = {}, []
+    for name, site in sorted(load_sites.items(), key=lambda kv: kv[1]):
+        lis = next(a for a in range(site - 8, site - 0x8F0, -4) if a not in taken)
+        reg = next(r for r in range(3, 32) if all(q != r or b < lis or a > site for q, a, b in spans))
+        taken.add(lis)
+        spans.append((reg, lis, site))
+        out[name] = (site, lis, reg)
+    return out
+
+
+def synthetic_image(shift=None, build="USA"):
+    """A synthetic image: every constant 1.5, each load site a `lis rK,hi` + `lfs f0,lo(rK)` pair (layout()) that addresses
+    its constant; `shift` = (name, bytes) makes that one load address a different word."""
+    engine, engine_dec, engine_li, load_sites = pg.tables(build)
+    img = bytearray(pg.IMAGE_SIZE)
+    for _, va in engine + engine_dec:
+        struct.pack_into(">f", img, va - pg.IMAGE_BASE, 1.5)
+    for _, va in engine_li:
+        struct.pack_into(">I", img, va - pg.IMAGE_BASE, (14 << 26) | LI_IMMEDIATE)
+    byname = dict(engine + engine_dec)
+    for name, (site, lis, reg) in layout(build).items():
+        va = byname[name] + (shift[1] if shift and shift[0] == name else 0)
+        hi, lo = (va + 0x8000) >> 16, va & 0xFFFF
+        struct.pack_into(">I", img, lis - pg.IMAGE_BASE, (15 << 26) | (reg << 21) | (hi & 0xFFFF))
+        struct.pack_into(">I", img, site - pg.IMAGE_BASE, (48 << 26) | (reg << 21) | (reg << 16) | lo)
+    return bytes(img)
+
+
+def find_xex():
+    for e in (os.environ.get("NFS_X360_XEX"),):
+        if e and Path(e).is_file():
+            return Path(e)
+    rf = os.environ.get("NFS_ROOTS") or os.path.join(os.environ.get("HOME", "/tmp"), "Library/Application Support/NFSMW-port/roots.txt")
+    try:
+        for line in Path(rf).read_text().splitlines():
+            if line.startswith("x360_root="):
+                for c in (Path(line.split("=", 1)[1].strip()) / "default.xex", Path(line.split("=", 1)[1].strip()).parent / "default.xex"):
+                    if c.is_file():
+                        return c
+    except OSError:
+        pass
+    c = HERE.parent.parent / "x360/default.xex"          # a development layout
+    return c if c.is_file() else None
+
+
+def main():
+    for build in sorted(pg.XEX_BUILDS):
+        synthetic_build(build)
+    try:       # the tables are per build: a USA image read with the PAL addresses is refused, and the reverse
+        pg.engine_text(synthetic_image(build="USA"), "USA image as PAL", build="PAL")
+    except SystemExit as e:
+        assert "is not what the load" in str(e) or "not an lfs" in str(e) or "not a known constant" in str(e), e
+    else:
+        raise AssertionError("a USA image was accepted with the PAL tables")
+    print("PASS: a USA image is refused with the PAL address tables")
+    pal_table_mutations()
+    return stub_and_owner_parts()
+
+
+# Constants whose address no load-site check covers yet in either build (no disassembly of their loading code in this
+# repository); this list may only shrink. Every other address, and every PAL address that differs from the USA one, is
+# refused when moved by 4 bytes.
+UNCHECKED = {"X360E_MIRROR_WORLD", "X360E_RIPPLE_FPS", "X360E_STANDARD_BRIGHTNESS", "X360E_SHADOWMAP_BIAS",
+             "X360E_DROP_RADIUS", "X360E_DROP_LIFE", "X360E_SHADOW_FOCUS_RACE", "X360E_SHADOW_NEAR"}
+
+
+def pal_table_mutations():
+    """Control: each PAL address in the table moved by +4 bytes, the image left as the real build has it.
+    Before the PAL sites and PAL_DATA_SHIFT: 23 of 51 refused, the blur ramp and front-end shadow focus accepted (FAIL);
+    after: 43 of 51 refused, every PAL-only address among them; the 8 accepted are exactly UNCHECKED."""
+    img = synthetic_image(build="PAL")
+    saved = (pg.ENGINE, pg.ENGINE_DEC, pg.PAL_MOVED)
+    accepted, names = set(), [n for n, _ in pg.ENGINE + pg.ENGINE_DEC]
+    for name in names:
+        bump = lambda rows: [(n, va + 4 if n == name else va) for n, va in rows]
+        if name in pg.PAL_MOVED:
+            pg.PAL_MOVED = {n: va + 4 if n == name else va for n, va in saved[2].items()}
+        else:
+            pg.ENGINE, pg.ENGINE_DEC = bump(saved[0]), bump(saved[1])
+        try:
+            pg.engine_text(img, "mutated table", build="PAL")
+        except SystemExit:
+            pass
+        else:
+            accepted.add(name)
+        finally:
+            pg.ENGINE, pg.ENGINE_DEC, pg.PAL_MOVED = saved
+    moved = accepted & set(pg.PAL_MOVED)
+    assert not moved, "PAL-only addresses moved by 4 bytes were accepted: %s" % sorted(moved)
+    assert accepted <= UNCHECKED, "accepted outside UNCHECKED: %s" % sorted(accepted - UNCHECKED)
+    print("PASS (PAL): %d of %d table addresses moved by 4 bytes refused, every PAL-only one among them" %
+          (len(names) - len(accepted), len(names)))
+
+
+def synthetic_build(build):
+    load_sites = pg.tables(build)[3]
+    text = pg.engine_text(synthetic_image(build=build), "synthetic image (test)", build=build)
+    got = macros(text)
+    missing = REQUIRED - set(got)
+    assert not missing, "missing macros: %s" % sorted(missing)
+    assert all(math.isfinite(number(v)) for v in got.values())
+    assert got["X360E_SHADOW_SIZE"] == str(LI_IMMEDIATE), got["X360E_SHADOW_SIZE"]      # the decoded immediate
+    print("PASS (%s): synthetic image -> %d macros, every runtime macro present, immediate decoded" % (build, len(got)))
+    for name in load_sites:       # control: an address that its load instruction does not read is refused
+        try:
+            pg.engine_text(synthetic_image((name, 4), build), "shifted", build=build)
+        except SystemExit as e:
+            assert "is not what the load" in str(e), e
+        else:
+            raise AssertionError("%s shifted by 4 bytes was accepted (%s)" % (name, build))
+    for kind, word in (("ori", lambda r: (24 << 26) | (r << 21) | (r << 16) | 4),               # ori rK,rK,4
+                       ("or", lambda r: (31 << 26) | (r << 21) | (r << 16) | (5 << 11) | (444 << 1)),     # or rK,rK,r5
+                       ("addis", lambda r: (15 << 26) | (r << 21) | (r << 16) | 1),             # addis rK,rK,1
+                       ("rlwinm", lambda r: (21 << 26) | (r << 21) | (r << 16) | (31 << 1)),    # rlwinm rK,rK,0,0,31
+                       ("lwzu", lambda r: (33 << 26) | (31 << 21) | (r << 16) | 4),             # lwzu r31,4(rK)
+                       ("stwu", lambda r: (37 << 26) | (31 << 21) | (r << 16) | 4),             # stwu r31,4(rK)
+                       ("lfsu", lambda r: (49 << 26) | (1 << 21) | (r << 16) | 4),              # lfsu f1,4(rK)
+                       ("lmw", lambda r: (46 << 26) | (r << 21) | (1 << 16)),                   # lmw rK,0(r1)
+                       ("sc", lambda r: 0x44000022)):                                           # sc 1 (may change any GPR)
+        for name, (site, _, reg) in layout(build).items():
+            if site - 4 in load_sites.values():       # the word before is another site's lfs
+                continue
+            img = bytearray(synthetic_image(build=build))
+            struct.pack_into(">I", img, site - 4 - pg.IMAGE_BASE, word(reg))     # right before the lfs
+            try:
+                pg.engine_text(bytes(img), "tampered", build=build)
+            except SystemExit as e:
+                assert "not a known constant" in str(e), e
+            else:
+                raise AssertionError("%s on the base register before %s was accepted" % (kind, name))
+    print("PASS (%s): ori / or / addis / rlwinm / lwzu / stwu / lfsu / lmw / sc on the tracked base register invalidate "
+          "it (refused for every site with a free word before it)" % build)
+    try:       # a site that is not an lfs
+        img = bytearray(synthetic_image(build=build))
+        struct.pack_into(">I", img, load_sites["X360E_FB_HIT_SOFT"] - pg.IMAGE_BASE, 0x60000000)
+        pg.engine_text(bytes(img), "nop", build=build)
+    except SystemExit as e:
+        assert "not an lfs" in str(e), e
+    else:
+        raise AssertionError("a non-lfs load site was accepted")
+    print("PASS (%s): +4-byte address shift refused for all %d checked constants; non-lfs site refused" %
+          (build, len(load_sites)))
+
+
+def stub_and_owner_parts():
+    stub = macros(pg.ENGINE_STUB)
+    assert REQUIRED <= set(stub), sorted(REQUIRED - set(stub))
+    assert "#define X360_ENGINE_CONSTS 0" in pg.ENGINE_STUB
+    lo, hi = number(stub["X360E_BRIGHT_LOW"]), number(stub["X360E_BRIGHT_HIGH"])
+    assert 0 < lo < 1 < hi
+    assert number(stub["X360E_FB_RAMP_LO"]) < number(stub["X360E_FB_RAMP_HI"])
+    assert number(stub["X360E_FB_HIT_SOFT"]) > 0 and number(stub["X360E_FB_WORLD_SLOPE"]) > 0
+    print("PASS: no-executable stub defines every macro with working fallbacks")
+
+    xex = find_xex()
+    if not xex:
+        print("SKIP parts 3-4: no X360 default.xex reachable")
+        return 3
+    with tempfile.TemporaryDirectory(prefix="x360-engine-") as d:
+        work = Path(d)
+        build = pg.xex_build(xex, work)
+        real = macros(pg.engine_consts(xex, work, build))
+        print("PASS: the player's executable is the %s build" % build)
+        assert REQUIRED <= set(real)
+        assert number(real["X360E_BRIGHT_LOW"]) < 1 < number(real["X360E_BRIGHT_HIGH"])
+        assert number(real["X360E_FB_RAMP_LO"]) < number(real["X360E_FB_RAMP_HI"])
+        assert 0 < number(real["X360E_SHADOW_LIGHT_Z_MIN"]) < 1
+        attrib = xex.parent / "files/GLOBAL/ATTRIBUTES.BIN"
+        if not attrib.is_file():
+            attrib = xex.parent / "GLOBAL/ATTRIBUTES.BIN"
+        if attrib.is_file():
+            word = pg.steer_low_word(attrib)
+            assert 0 < struct.unpack(">f", struct.pack(">I", word))[0] < 0.5 and "0x%08Xu" % word in pg.steer_text(word)
+            print("PASS: steering dead zone read from ATTRIBUTES.BIN")
+        print("PASS: the player's executable yields plausible numbers")
+        data = bytearray(xex.read_bytes())
+        for pos in (len(data) // 3, len(data) // 2):          # a changed byte inside the image data
+            bad = bytearray(data)
+            bad[pos] ^= 0x01
+            path = work / "bad.xex"
+            path.write_bytes(bad)
+            try:
+                pg.engine_consts(path, work, build)
+            except SystemExit as e:
+                assert "not the supported" in str(e), e
+            else:
+                raise AssertionError("a corrupted executable was accepted (byte %d)" % pos)
+        print("PASS: corrupted executables refused")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,112 @@
+# Troubleshooting
+
+## Setup
+
+**An all-in-one export says "Re-export from Setup to update"** — automatic updates are disabled for exports.
+Run the latest Setup to build the normal install, then use **Export all-in-one app…** with a new name.
+Keep the previous export to roll back. Setup also refuses to install over an exported app; choose a separate
+location for the normal install. Saves and settings remain in Application Support and are backed up separately.
+
+**Export destination already exists** — choose a new `.app` name. Existing exports are never replaced.
+If the export reports missing, linked or damaged assets, repair the normal install with Setup and export again.
+Changing the saved game folder or holding Option does not redirect an exported app to external files.
+
+**An export uses more space on the backup drive** — APFS clones share blocks only on the same volume.
+Copies to another volume need the full data size and are checked with SHA-256. The export result distinguishes
+allocated file blocks (which include shared blocks) from the observed volume free-space change. Other disk
+activity can affect that change. **Show Log** includes the file counts and byte measurements.
+
+**"Apple could not verify" when opening the Setup app** — it is not notarized by Apple. Click **Done**, then
+**System Settings > Privacy & Security > Open Anyway**. You only need to do this once. The game app it builds is made
+on your Mac.
+
+**Setup stopped with an error** — it names the step, says what to do, and **Show Log** opens the full log. Logs are in
+`~/Library/Logs/NFSMW-Setup/`. A failed build installs nothing and leaves any earlier install as it was.
+
+**"Setup requires native Apple Silicon macOS"** — run the Apple Silicon version of Setup, not under Rosetta. If you
+run `setup.sh` in Terminal, turn off **Open using Rosetta** for Terminal (Finder > Get Info) or use
+`arch -arm64 ./setup.sh ...`. Intel Macs are not supported.
+
+**"Intel-only (x86_64) developer tools found"** — Setup builds only with Apple's own tools in `/usr/bin`; the message
+names the Intel-only tool it found. Install Apple's Command Line Tools (`xcode-select --install`), then build again.
+
+**Developer tools missing, too old, or unable to compile** — Setup builds the game with Apple's Command Line Tools
+(clang and the macOS SDK; full Xcode is not needed). Install or update them in **System Settings > General > Software
+Update**, or run `xcode-select --install`, then build again. The macOS SDK must be version 14 or newer.
+
+**"The PC folder has no ... directory" / "is missing ..."** — choose the installed game folder that holds `speed.exe`
+together with `GLOBAL`, `TRACKS`, `CARS`, `FRONTEND` and `SOUND`, or a `.zip` that contains that folder. A PC
+installer is not enough. For your game discs, choose **PC disc images** instead (below).
+
+**"The .zip contains an unsafe path" / "a link" / "is far larger than the game" / "can't be read"** — Setup only
+unpacks a `.zip` that holds plain game files. Download it again, or unzip it yourself and choose the folder.
+
+**"Disc N of the set ... was not found"** — Setup looks for the other discs beside the one you chose. It shows a
+**Disc N** row for each disc it couldn't find: choose that disc there, from any folder and under any name (Setup reads
+each disc's number from the disc itself). Or keep the `.iso` images of all your discs in one folder.
+
+**"Your discs have an earlier version of the PC game than 1.3"** — also choose the game's official 1.3 update
+(`nfsmwpatch1.3.exe`). Setup applies it to its own copy of the game; it only reads the update and never runs it.
+
+**"The speed.exe on your discs and in the 1.3 update is copy-protected"** — Setup can't translate copy-protected
+code. Also choose a `speed.exe` that has the 1.3 code; Setup checks it the same way as for a game folder.
+
+**"Setup can't read this update" / "does not match its checksum"** — the chosen file is not the official 1.3 update,
+or it is damaged. Download the update again.
+
+**"The disc image is truncated" / "not a disc image Setup can read"** — the image is incomplete (for example an
+interrupted download) or in a format Setup doesn't read. Make the image again, or mount it in Finder and choose the
+mounted disc.
+
+**The `speed.exe` can't be used** — the port is a translation of the PC game's version 1.3 code. Other versions contain
+different code and would not work. Any `speed.exe` that has the 1.3 code is accepted; the log shows the code region
+that differs. Setup changed nothing.
+
+**"There is not enough free disk space"** — free some space on the volumes you chose for the app and for Setup's
+work folder (about 12 GB while Setup builds), then build again.
+
+**"Another Setup is using this work or cache folder"** — wait for the other Setup to finish, or quit it.
+
+**Xbox 360 copy rejected** — Setup says what is wrong with it. It supports the USA and the European (PAL) retail
+discs ("not a supported NFS:MW retail build" means another release, or a modified or damaged executable). Choose your
+own complete Xbox 360 copy (a folder or an `.iso`), or leave it out to build the PC game alone. Xbox 360 features are
+then absent.
+
+**"Your 3.x saves were not copied into 4.0"** — a 3.x save was damaged or incomplete, so Setup copied none of them
+and changed nothing. The message names the 3.x folder. With the game closed you can copy a career folder (it holds a
+file of the same name) into `~/Library/Application Support/NFSMW-port/NFS Most Wanted/` yourself, or start a new
+career. Setup never copies over saves 4.0.0 already has.
+
+**"Dependency checksum failed" or "Setup source is missing ..."** — the downloaded Setup is damaged or incomplete.
+Download it again from the releases page.
+
+## Playing
+
+**The game won't open, or quits at once** — look at the newest log in `~/Library/Logs/NFSMW-port/`
+(`NFSMW.log`; the run before is `NFSMW.previous.log`). It begins with the app version and your Mac. Please include it
+when you report a problem.
+
+**The F10 menu doesn't open** — on a Mac keyboard press **Fn+F10**. On a DualSense or DualShock 4, click the touchpad.
+
+**Check for updates says nothing new** — it asks GitHub only when you press it. "No answer: press to retry" means it
+could not reach GitHub.
+
+**Update now failed or asks for sources** — choose **Open log** in Display & performance > Online. Keep the original PC and any selected Xbox 360 sources and `~/Library/Application Support/NFSMW-Setup/source-choices.json`. If missing or moved, run the latest Setup and select them again, then retry. In 4.2.0, the update check only opens the browser: quit the game and run the new Setup manually.
+
+**The triggers shift gears** — on PlayStation choose **F10 > Controls > Triggers > Pedals** for R2 gas and L2 brake/reverse. Shift is the default; returning to it restores your saved bindings. See **Help > Guide** for layouts and DualSense effects.
+
+**Online free roam won’t connect** — the beta is Off until you Host or Join. Both Macs must be in career free roam on the same game version. Check the host’s current code, firewall permissions and router setup; try swapping hosts. Some networks cannot accept incoming UDP, and there is no internet relay fallback. Follow the [Guide](runtime/docs/guide.md#online-beta); keep the firewall enabled and keep codes private.
+
+**Online frame rate or missing distant cars** — sessions have a 60-fps ceiling and show at most six nearby remote cars. The ceiling is not a frame-rate guarantee.
+
+**Cars pass through each other online** — check **Online (beta) > Ghost mode**. **D-pad Down / G** toggles it while driving.
+
+**Discord status doesn't show** — it is off by default; switch it on in F10 > Display & performance > Online. Discord
+must be running on the same Mac.
+
+## Reporting a bug
+
+Open an issue on [GitHub](https://github.com/elforeign/nfs-most-wanted-mac/issues), or ask in #help on the
+[Discord](https://discord.gg/d6HfMwdM9v). Include your Mac model and macOS version, what you did, what you expected,
+and the game's log (and Setup's log if Setup failed).
+Please do **not** attach game files or saves that contain game data.
