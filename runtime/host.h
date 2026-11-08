@@ -48,6 +48,7 @@ int win32_d3d9(Cpu *c, const char *fn);     // d3d9.m
 int win32_dsound(Cpu *c, const char *fn);   // dsound.c
 int win32_dinput(Cpu *c, const char *fn);   // dinput.c
 int win32_ws2(Cpu *c, const char *fn);      // ws2_32.c (WS2_32 and NETAPI32)
+int win32_msvcr(Cpu *c, const char *fn);    // msvcr.c (MSVCR80 and MSVCP80, the dynamic VC++ 2005 runtime)
 int threads_close(uint32_t h);
 void threads_init(void);
 void gil_maybe_yield(Cpu *c);

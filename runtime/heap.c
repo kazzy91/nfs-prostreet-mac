@@ -523,4 +523,16 @@ int win32_heap(Cpu *c, const char *fn) {
     if (!strcmp(fn, "GlobalFree")) { heap_free(proc_heap, arg(c, 0)); RET(0, 1); }
     return 0;
 }
+
+// The CRT heap for msvcr.c (malloc and friends): the same process heap HeapAlloc serves.
+uint32_t crt_heap_alloc(uint32_t n) { heaps_init(); return proc_alloc(n); }
+void crt_heap_free(uint32_t a) { heaps_init(); heap_free(proc_heap, a); }
+uint32_t crt_heap_size(uint32_t a) { heaps_init(); return heap_size(proc_heap, a); }
+uint32_t crt_heap_realloc(uint32_t a, uint32_t n) {
+    heaps_init();
+    uint32_t r = heap_realloc(proc_heap, a, n, 0);
+    if (!r && heap_owns(proc_heap, a) && n < 0x10000000u) full(proc_heap, n);
+    heap_log_tick();
+    return r;
+}
 #endif

@@ -546,6 +546,9 @@ static void cs_enter(Cpu *c, uint32_t cs) {
 static void cs_leave(uint32_t cs) {
     if (M32(cs + 8) && --M32(cs + 8) == 0) { M32(cs + 12) = 0; changed(); }
 }
+// msvcr.c's _lock/_unlock: the CRT's numbered locks are guest critical sections.
+void crt_cs_enter(Cpu *c, uint32_t cs) { cs_enter(c, cs); }
+void crt_cs_leave(uint32_t cs) { cs_leave(cs); }
 
 // ---------------- imports ----------------
 int win32_threads(Cpu *c, const char *fn) {

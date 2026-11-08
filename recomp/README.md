@@ -8,6 +8,8 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 | `runtime.h` | `Cpu` struct, guest memory macros (`M32(a)` = `G + a`), flag helpers, x87 emulation |
 | `difftest.py` | Differential tests against the original code under Unicorn |
 | `build_all.py` | Translates all of `speed.exe` and compiles it → `out/speed.a` |
+| `pe_report.py` | PE facts (sections, entropy, entry point, imports, exports, version) and the Phase 0 gate: exit 0 plain, 2 protected/packed, 1 not a PE. Stdlib only. Test: `pe_report_test.py` |
+| `import_coverage.py` | An exe's imports vs the host layer, per DLL; routing read from `host_import` in `runtime/boot.c`, exact names only. `--mw` checks it on MW's own list. Test: `import_coverage_test.py` |
 
 ## How it translates
 

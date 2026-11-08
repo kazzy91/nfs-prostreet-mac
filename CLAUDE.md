@@ -39,6 +39,8 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
 - The EU retail 1.0 disc `nfs.exe` (linked 2007-10-27) is SecuROM-protected: the entry point is in the `est` stub,
   `.text` is encrypted (entropy 7.66). It can't be recompiled. Decide which version to target (1.0 or 1.1) in Phase 0;
   MW targeted its last official patch.
+- CRT shim (`runtime/msvcr.c`, `docs/crt-shim.md`): tranche 1 done, MSVCR80 99/149 handled; stdio/files, broken-down
+  time, threads, exceptions and MSVCP80 remain. Phase 0 tools: `recomp/pe_report.py`, `recomp/import_coverage.py`.
 - `.gitignore` blocks game executables/DLLs/disc images, game data formats, a game folder dropped into the checkout,
   build output (`recomp/out/`, `**/build/`, `*.o`, `*.a`, app bundles), dumps and `USERDATA/`. It's a safety net:
   still check `git status`. Add new derived-output paths to it as they appear.
@@ -62,7 +64,9 @@ Each phase ends with its exit criteria met and a short status note added to this
 
 ### Phase 0: input
 An `nfs.exe` without SecuROM, from a release the user owns (plus `server.dll`, and `msvcr80.dll`/`msvcp80.dll` if
-the CRT is translated), in the game folder outside the repo. **Exit:** exe parses, entry point in `.text`, `.text` entropy in the normal x86 range, version and hash
+the CRT is translated), in the game folder outside the repo. Check it with
+`python3 -I recomp/pe_report.py <nfs.exe>` (must exit 0, "verdict: plain") and recount imports with
+`python3 -I recomp/import_coverage.py <nfs.exe>`. **Exit:** exe parses, entry point in `.text`, `.text` entropy in the normal x86 range, version and hash
 recorded here, code fingerprint pinned in `exe_fingerprint.py` behind a game profile.
 
 ### Phase 1: analysis ✅ (2026-11-08)

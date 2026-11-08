@@ -81,6 +81,17 @@ static void die(const char *fmt, ...) {
     exit(1);
 }
 
+// msvcr.c's exit paths: exit()/_exit() end the run like ExitProcess; invalid parameters end it with a message.
+void app_restart_game_exited(int successful);
+void crt_exit_process(Cpu *c, uint32_t code) {
+    (void)c;
+    printf("boot: exit(%u) after %u import calls\n", code, import_calls);
+    app_restart_game_exited(code == 0);
+    exit(0);
+}
+void crt_fatal(const char *fn, const char *why) __attribute__((noreturn));
+void crt_fatal(const char *fn, const char *why) { die("MSVCR80 %s: %s", fn, why); __builtin_unreachable(); }
+
 // ---------------- guest helpers ----------------
 uint32_t galloc_used(void) { return heap_next - HEAP_BASE; }
 void heap_note(int kind, void *ret, uint32_t n);   // heap.c: BOOT_DIAG allocation call sites
@@ -1503,6 +1514,7 @@ void host_import(Cpu *c, uint32_t slot) {
            : !strncmp(name, "DINPUT8", 7) ? win32_dinput(c, fn)
            : !strncmp(name, "WS2_32", 6) || !strncmp(name, "NETAPI32", 8) ? win32_ws2(c, fn)
            : !strncmp(name, "USER32", 6) || !strncmp(name, "GDI32", 5) ? win32_user32(c, fn)
+           : !strncmp(name, "MSVCR80", 7) || !strncmp(name, "MSVCP80", 7) ? win32_msvcr(c, fn)
            : win32_threads(c, fn) || win32_heap(c, fn) || win32(c, fn);
     if (!ok)
         die("not implemented yet: %s (call %u, return address %08X)", name, import_calls, ret_addr);

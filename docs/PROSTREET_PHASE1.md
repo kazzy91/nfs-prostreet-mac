@@ -49,19 +49,24 @@ imports **plus the wrapper's own**. Re-run this on an exe without SecuROM before
 in `runtime/` (boot.c, threads.c, heap.c, user32.m, d3d9.m, d3dx*.c, dsound.c, dinput.c, ws2_32.c) matches the name.
 It does not mean the behaviour fits ProStreet's use of it.
 
-MW: 300 functions in 13 DLLs. ProStreet disc exe: **542 functions in 18 DLLs**. Handled: 234 (240 counting WSOCK32
-aliases).
+The counts come from `recomp/import_coverage.py`, which reads the DLL routing from `host_import` and counts exact
+names only. The first hand count (234 handled) wrongly credited prefix tests: `Global*` (`GlobalLock`, `GlobalUnlock`,
+`GlobalMemoryStatus`) and `*KeyEx` (`RegCreateKeyExA`, `RegEnumKeyExA`), which in `runtime/` are a negative gate and a
+branch inside the `RegOpenKeyExA` handler.
+
+MW: 300 functions in 13 DLLs (287 handled; the 13 others are never called). ProStreet disc exe: **542 functions in
+18 DLLs, 229 handled** (234 counting the 5 WSOCK32 imports covered by aliasing to WS2_32).
 
 | DLL | Imports | Handled | Missing | Notes |
 |---|---|---|---|---|
-| KERNEL32 | 194 | 137 | 57 | wide-char file API, 64-bit file pointers, file mapping, resources, `lstr*`, `Local*`; many probably SecuROM's |
+| KERNEL32 | 194 | 134 | 60 | wide-char file API, 64-bit file pointers, file mapping, resources, `lstr*`, `Local*`/`Global*` locks; many probably SecuROM's |
 | USER32 | 80 | 40 | 40 | display/system metrics, cursors, `LoadStringA`, `GetWindowLongA`; dialogs, menus and window enumeration probably SecuROM's |
-| ADVAPI32 | 41 | 8 | 33 | services, SIDs/tokens, event log, crypto: almost certainly SecuROM's; `RegEnumValueA`, `RegDeleteKeyA`/`ValueA`, `RegQueryInfoKeyA` probably the game's |
+| ADVAPI32 | 41 | 6 | 35 | services, SIDs/tokens, event log, crypto: almost certainly SecuROM's; `RegCreateKeyExA`, `RegEnumKeyExA`, `RegEnumValueA`, `RegDeleteKeyA`/`ValueA`, `RegQueryInfoKeyA` probably the game's |
 | **MSVCR80** | 149 | 0 | **149** | **new: dynamic CRT** (MW linked its CRT statically, so it ran as translated code) |
 | MSVCP80 | 3 | 0 | 3 | `std::string` ctor/dtor |
 | d3dx9_34 | 14 | 7 | 7 | MW used d3dx9_26 |
 | WS2_32 | 39 | 34 | 5 | `#11` inet_addr, `#12` inet_ntoa, `#51` gethostbyaddr, `#55` getservbyname, `#56` getservbyport |
-| WSOCK32 | 6 | 0 | 6 | ordinals 3/16/19/22/111/112 = closesocket/recv/send/shutdown/WSAGetLastError/WSASetLastError, already in the WS2 shim: alias them |
+| WSOCK32 | 6 | 0 | 6 | ordinals 3/16/19/22/111/112 = closesocket/recv/send/shutdown/WSAGetLastError/WSASetLastError. The WS2 shim already handles the first five by the same ordinal, so alias them; `#112` WSASetLastError is new |
 | VERSION | 3 | 0 | 3 | `GetFileVersionInfo*`, `VerQueryValueA` |
 | SHELL32 | 2 | 0 | 2 | `ShellExecuteA`/`ExA` (stub) |
 | RPCRT4 | 2 | 0 | 2 | `UuidToStringA`, `RpcStringFreeA` |
@@ -85,8 +90,8 @@ on MW's 108 shaders.
   GetShortPathNameA WaitNamedPipeA SetNamedPipeHandleState SetFileAttributesA CopyFileA DeviceIoControl
   CreateFileMappingA GetFileAttributesA OpenEventA ReadConsoleInputA SetConsoleMode GetConsoleMode GetWindowsDirectoryA
   GetExitCodeProcess GetVersion GetEnvironmentVariableA LocalFree LocalAlloc LoadLibraryW LoadLibraryExA LoadLibraryExW
-  GetUserDefaultLangID LockResource LoadResource FindResourceA RtlUnwind FlushConsoleInputBuffer LocalLock LocalUnlock
-  CompareFileTime
+  GetUserDefaultLangID LockResource LoadResource FindResourceA RtlUnwind FlushConsoleInputBuffer GlobalLock LocalLock
+  GlobalUnlock LocalUnlock CompareFileTime GlobalMemoryStatus
 - **USER32:** SystemParametersInfoA EnumDisplaySettingsA GetWindowLongA LoadCursorFromFileA SetSystemCursor LoadImageA
   CopyImage GetProcessWindowStation GetUserObjectInformationW DialogBoxIndirectParamA SetDlgItemTextW SetDlgItemTextA
   SetWindowTextW EnableWindow FlashWindow SetWindowTextA UnregisterClassA LoadStringA CheckMenuItem EnableMenuItem
@@ -98,7 +103,7 @@ on MW's 108 shaders.
   CreateServiceA RegQueryValueA RegSetValueA EqualSid RegDeleteValueA GetSidSubAuthorityCount GetSidSubAuthority
   GetSidIdentifierAuthority GetTokenInformation OpenProcessToken OpenThreadToken DeregisterEventSource ReportEventA
   RegisterEventSourceA RevertToSelf CloseServiceHandle IsValidSid GetUserNameA RegQueryInfoKeyA RegEnumValueA
-  RegDeleteKeyA
+  RegDeleteKeyA RegCreateKeyExA RegEnumKeyExA
 - **d3dx9_34:** D3DXMatrixMultiplyTranspose D3DXSaveSurfaceToFileA D3DXGetVertexShaderProfile D3DXGetPixelShaderProfile
   D3DXCreateCubeTextureFromFileInMemory D3DXCreateVolumeTextureFromFileInMemory D3DXSaveSurfaceToFileInMemory
 - **MSVCR80 (149):** stdio (`fopen`/`fread`-family, `printf`/`sprintf`/`sscanf`, `_vsnprintf`, `__iob_func`), low-level
