@@ -1,0 +1,80 @@
+# Game files and anything derived from them never enter the repository (CLAUDE.md, rule 1).
+# This is a safety net, not a substitute for checking `git status` before every commit.
+
+# --- Executables, libraries and disc images from the game -----------------------------------------
+*.exe
+*.dll
+*.EXE
+*.DLL
+*.iso
+*.ISO
+*.cab
+*.CAB
+*.mdf
+*.mds
+*.bin.cue
+*.cue
+*.torrent
+
+# --- Game data formats (assets, archives, movies, audio banks) ------------------------------------
+*.bun
+*.BUN
+*.lzc
+*.big
+*.BIG
+*.vp6
+*.VP6
+*.abk
+*.ABK
+*.mus
+*.MUS
+*.asf
+*.ASF
+*.sb
+*.fsh
+*.fng
+# Raw binaries are game data unless they are our own synthetic shader test vectors.
+*.bin
+*.BIN
+!host/shaders/testdata_synth/**/*.bin
+
+# A game folder copied or symlinked into the checkout by mistake
+/Games/
+/ProStreet/
+/GameFiles/
+/game/
+Need*For*Speed*/
+
+# --- Build output (generated C from nfs.exe is derived game code) ---------------------------------
+recomp/out/
+**/build/
+*.o
+*.a
+*.dylib
+*.dSYM/
+runtime/boot
+runtime/*.app/
+media/mediatest
+out/
+work/
+
+# --- Dumps, listings and run-time data ------------------------------------------------------------
+*.dmp
+*.core
+*.idb
+*.i64
+*.gpr
+*.rep/
+*.lst
+USERDATA/
+*.log
+
+# --- Tooling and OS -------------------------------------------------------------------------------
+tools/.venv/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# --- Machine-local notes (CLAUDE.md rule 1: local state stays out of the public repo) -----------------
+CLAUDE.local.md
