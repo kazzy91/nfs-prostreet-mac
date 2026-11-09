@@ -81,6 +81,15 @@ static void die(const char *fmt, ...) {
     exit(1);
 }
 
+// LoadLibraryA (and win32_more.c's W/Ex variants): only the LAN server module is loadable; anything else fails.
+static int resolve(const char *win, char *out, size_t n);
+uint32_t host_load_library(Cpu *c, const char *name) {
+    if (!server_library_name(name)) return 0;
+    char path[4096];
+    resolve("server.dll", path, sizeof path);
+    return server_load(c, path);
+}
+
 // msvcr.c's exit paths: exit()/_exit() end the run like ExitProcess; invalid parameters end it with a message.
 void app_restart_game_exited(int successful);
 void crt_exit_process(Cpu *c, uint32_t code) {
@@ -823,6 +832,13 @@ int host_mkdir(const char *win) {                             // CreateDirectory
     return 1;
 }
 int host_file_exists(const char *win) { char host[4096]; struct stat st; resolve(win, host, sizeof host); return !stat(host, &st); }
+uint32_t host_file_attr(const char *win) {                   // GetFileAttributesA: DIRECTORY 0x10 / ARCHIVE 0x20 / -1
+    char host[4096];
+    struct stat st;
+    resolve(win, host, sizeof host);
+    if (stat(host, &st)) { last_error = errno == ENOENT ? 2 : 3; return 0xFFFFFFFFu; }
+    return S_ISDIR(st.st_mode) ? 0x10 : 0x20;
+}
 uint32_t host_find_first(const char *win, uint32_t data) { return find_first(win, data); }   // data: WIN32_FIND_DATAA
 int host_find_next(uint32_t h, uint32_t data) {
     int k = find_handle(h);
@@ -1070,14 +1086,7 @@ static int win32(Cpu *c, const char *fn) {
         if (boot_trace) fprintf(stderr, "      GetProcAddress(%08X) -> not provided\n", arg(c, 1));
         RET(0, 2);
     }
-    if (!strcmp(fn, "LoadLibraryA")) {
-        if (server_library_name(gptr(arg(c, 0)))) {
-            char path[4096];
-            resolve("server.dll", path, sizeof path);
-            RET(server_load(c, path), 1);
-        }
-        RET(0, 1);
-    }
+    if (!strcmp(fn, "LoadLibraryA")) RET(host_load_library(c, gptr(arg(c, 0))), 1);
     if (!strcmp(fn, "VirtualAlloc")) {
         uint32_t n = arg(c, 1), requested = arg(c, 0);
         if (requested && requested < SERVER_RESERVED_END && (uint64_t)requested + n > SERVER_BASE) {
@@ -1359,6 +1368,8 @@ static int win32(Cpu *c, const char *fn) {
     }
     if (!strcmp(fn, "CloseHandle")) {
         if (threads_close(arg(c, 0))) RET(1, 1);
+        int win32_more_close(uint32_t h);                       // win32_more.c: file-mapping objects
+        if (win32_more_close(arg(c, 0))) RET(1, 1);
         if (handle_music(arg(c, 0))) {
             uint32_t k = (arg(c, 0) - HANDLE_BASE) / 4;
             memset(&music_handles[k], 0, sizeof music_handles[k]); fds[k] = 0;
@@ -1573,10 +1584,10 @@ void host_import(Cpu *c, uint32_t slot) {
            : !strncmp(name, "d3d9", 4) ? win32_d3d9(c, fn)
            : !strncmp(name, "DSOUND", 6) ? win32_dsound(c, fn)
            : !strncmp(name, "DINPUT8", 7) ? win32_dinput(c, fn)
-           : !strncmp(name, "WS2_32", 6) || !strncmp(name, "NETAPI32", 8) ? win32_ws2(c, fn)
-           : !strncmp(name, "USER32", 6) || !strncmp(name, "GDI32", 5) ? win32_user32(c, fn)
+           : !strncmp(name, "WS2_32", 6) || !strncmp(name, "WSOCK32", 7) || !strncmp(name, "NETAPI32", 8) ? win32_ws2(c, fn)
+           : !strncmp(name, "USER32", 6) || !strncmp(name, "GDI32", 5) ? win32_user32(c, fn) || win32_more(c, fn)
            : !strncmp(name, "MSVCR80", 7) || !strncmp(name, "MSVCP80", 7) ? win32_msvcr(c, fn)
-           : win32_threads(c, fn) || win32_heap(c, fn) || win32(c, fn);
+           : win32_threads(c, fn) || win32_heap(c, fn) || win32(c, fn) || win32_more(c, fn);
     if (!ok)
         die("not implemented yet: %s (call %u, return address %08X)", name, import_calls, ret_addr);
     if (gr) { gr->imp = NULL; gr->imp_t0 = host_ticks(); }   // imp_t0 now: when guest code resumed

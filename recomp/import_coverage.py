@@ -12,8 +12,7 @@ gates or tracing, not handlers.
 
 "Handled" means a handler exists for the name. Whether it does what this game needs is a separate question.
 
-WSOCK32 imports are reported with the WS2_32 ordinal of the same function: for the ordinals listed in WSOCK32_AS_WS2
-the two DLLs export the same function under the same number, so routing WSOCK32 to win32_ws2 covers them.
+WSOCK32 shares WS2_32's ordinals for the socket core, and host_import routes both DLLs to win32_ws2.
 
 Offline test: recomp/import_coverage_test.py.
 """
@@ -26,12 +25,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RUNTIME = os.path.join(HERE, "..", "runtime")
 sys.path.insert(0, HERE)
 import pe_report  # noqa: E402
-
-# WSOCK32 ordinal -> the WS2_32 ordinal of the same function (identical numbers for the socket core).
-WSOCK32_AS_WS2 = {n: n for n in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-                                 51, 52, 53, 54, 55, 56, 57, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
-                                 112, 113, 114, 115, 116, 151)}
-
 
 def _read(path):
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -114,10 +107,6 @@ class Host:
 
     def note(self, dll, fn):
         """A hint for an unhandled import, or ''."""
-        if dll.upper().startswith("WSOCK32") and fn.startswith("#") and fn[1:].isdigit():
-            n = WSOCK32_AS_WS2.get(int(fn[1:]))
-            if n is not None and self.covers("WS2_32.dll", f"#{n}"):
-                return f"= WS2_32 #{n} (handled there: route WSOCK32 to win32_ws2)"
         return ""
 
 
@@ -145,9 +134,7 @@ def render(rows, show_all=False):
     for r in rows:
         L.append(f"| {r['dll']} | {r['total']} | {r['handled']} | {len(r['missing'])} | {', '.join(r['handlers'])} |")
     tot, hand = sum(r["total"] for r in rows), sum(r["handled"] for r in rows)
-    aliases = sum(1 for r in rows for _, n in r["missing"] if n)
-    L.append(f"\nTotal: {tot} imports in {len(rows)} DLLs, {hand} handled, {tot - hand} missing"
-             + (f" ({aliases} of them covered by routing WSOCK32 to the WS2_32 handler)" if aliases else "") + ".")
+    L.append(f"\nTotal: {tot} imports in {len(rows)} DLLs, {hand} handled, {tot - hand} missing.")
     for r in rows:
         if r["missing"] and (show_all or len(r["missing"]) <= 200):
             L.append(f"\n**{r['dll']}** missing: " + " ".join(f"{f} ({n})" if n else f for f, n in r["missing"]))

@@ -58,6 +58,18 @@ int d3dx(Cpu *c, const char *fn) {
         st(arg(c, 0), o, 16);
         RET(arg(c, 0), 2);
     }
+    if (!strcmp(fn, "D3DXMatrixMultiplyTranspose")) {   // (pOut, pM1, pM2): transpose(M1 * M2), d3dx9_34 (no MW hooks here)
+        ld(arg(c, 1), a, 16); ld(arg(c, 2), b, 16);
+        mul(o, a, b);
+        for (int i = 0; i < 4; ++i) for (int j = 0; j < 4; ++j) a[i * 4 + j] = o[j * 4 + i];
+        st(arg(c, 0), a, 16);
+        RET(arg(c, 0), 3);
+    }
+    if (!strcmp(fn, "D3DXGetVertexShaderProfile") || !strcmp(fn, "D3DXGetPixelShaderProfile")) {   // (device)
+        static uint32_t vs, ps;                       // the highest profiles host/shaders translates (SM 3.0)
+        if (!vs) { vs = gstr("vs_3_0"); ps = gstr("ps_3_0"); }
+        RET(strstr(fn, "Vertex") ? vs : ps, 1);
+    }
     if (!strcmp(fn, "D3DXMatrixMultiply")) {
         widescreen_projection(c, arg(c, 2));        // Hor+ for the game's per-view projection (only at 006CF62A)
         x360_shadow_camera(c, arg(c, 1), arg(c, 2)); // X360 light camera for view 15 (only at 006E50C3)

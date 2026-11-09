@@ -395,6 +395,17 @@ int win32_ws2(Cpu *c, const char *fn) {
         }
         case 116: RET(0, 0);                          // WSACleanup
         case 111: RET(wsa_err, 0);                    // WSAGetLastError
+        case 112: wsa_err = arg(c, 0); RET(0, 1);     // WSASetLastError (WSOCK32 shares these ordinals)
+        case 11: RET(arg(c, 0) ? (uint32_t)inet_addr((char *)G + arg(c, 0)) : 0xFFFFFFFFu, 1);   // inet_addr: INADDR_NONE when invalid
+        case 12: {                                    // inet_ntoa(struct in_addr by value): a per-thread buffer
+            static __thread uint32_t ntoa_buf;
+            if (!ntoa_buf) ntoa_buf = galloc(16);
+            uint32_t ip = arg(c, 0);
+            snprintf((char *)G + ntoa_buf, 16, "%u.%u.%u.%u", ip & 0xFF, ip >> 8 & 0xFF, ip >> 16 & 0xFF, ip >> 24);
+            RET(ntoa_buf, 1);
+        }
+        case 51: wsa_err = 11004; RET(0, 3);          // gethostbyaddr: no reverse lookups (WSANO_DATA)
+        case 55: case 56: wsa_err = 11004; RET(0, 2); // getservbyname / getservbyport: no services database
         case 23: {                                    // socket(af, type, proto)
             (void)lan_diag_on(); // initialize the immutable diagnostic switch before async receives
             int type = (int)arg(c, 1);
