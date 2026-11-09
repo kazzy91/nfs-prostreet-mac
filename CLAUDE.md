@@ -39,8 +39,9 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
 - The EU retail 1.0 disc `nfs.exe` (linked 2007-10-27) is SecuROM-protected: the entry point is in the `est` stub,
   `.text` is encrypted (entropy 7.66). It can't be recompiled. Decide which version to target (1.0 or 1.1) in Phase 0;
   MW targeted its last official patch.
-- CRT shim (`runtime/msvcr.c`, `docs/crt-shim.md`): tranche 1 done, MSVCR80 99/149 handled; stdio/files, broken-down
-  time, threads, exceptions and MSVCP80 remain. Phase 0 tools: `recomp/pe_report.py`, `recomp/import_coverage.py`.
+- CRT shim (`runtime/msvcr.c`, `docs/crt-shim.md`): MSVCR80 136/149 handled (memory, strings, math, printf/scanf,
+  start-up, files/stdio, time, threads, data imports). C++ exceptions/SEH, `raise` and MSVCP80 remain; they need real call
+  sites. Phase 0 tools: `recomp/pe_report.py`, `recomp/import_coverage.py`.
 - `.gitignore` blocks game executables/DLLs/disc images, game data formats, a game folder dropped into the checkout,
   build output (`recomp/out/`, `**/build/`, `*.o`, `*.a`, app bundles), dumps and `USERDATA/`. It's a safety net:
   still check `git status`. Add new derived-output paths to it as they appear.
@@ -52,8 +53,8 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
 - `d3dx9_34` instead of `d3dx9_26`: 7 new functions (texture-from-memory, `SaveSurfaceToFile*`, shader profiles).
 - Wide-char and 64-bit file APIs, file mapping, resource loading, `VERSION.dll`, `WSOCK32` aliases, PunkBuster
   (stub: online only).
-- 234 of 542 imports already match a MW handler. Many of the missing ADVAPI32/USER32/KERNEL32 ones are probably
-  SecuROM's own. Recount on an exe without SecuROM.
+- 229 of 542 imports matched a MW handler before the CRT shim (365 with it). Many of the missing ADVAPI32/USER32/
+  KERNEL32 ones are probably SecuROM's own. Recount on an exe without SecuROM.
 - Same fixed-address model: image base `0x00400000`, relocations stripped. The guest memory layout constants
   (`HEAP_BASE 0x30000000`, `SERVER_BASE 0x02000000`, thunks at `0xF0000000`) clear ProStreet's image (ends below
   `0x01A33000` even with the SecuROM sections).

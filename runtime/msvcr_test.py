@@ -45,7 +45,7 @@ def main():
             print(b.stdout + b.stderr)
             print("FAIL: build")
             return 1
-        env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0")
+        env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0", MSVCR_TEST_TMP=tmp)
         r = subprocess.run([exe], capture_output=True, text=True, env=env, timeout=120)
         print(r.stdout.strip())
         if r.returncode:

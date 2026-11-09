@@ -42,22 +42,26 @@ hard to do natively.
 | Conversion (`atoi`, `atof`, `strtol`, `strtoul`, `_ltoa`, `abs`) | done |
 | Math (`ceil`, `floor`, `cos`, `sqrt`, `ldexp`, `_isnan`, the 16 `_CI*`, `_control87`, `_controlfp_s`) | done |
 | `rand`, `srand`, `qsort`, `bsearch`, `clock`, `_time64`, `_ftime64`, `getenv` | done |
-| printf/scanf (`sprintf`, `_snprintf`, `vsprintf`, `_vsnprintf`, `printf`, `sscanf`) | done; `fprintf` with stdio, `_vsnwprintf` (wide) next |
+| printf/scanf (`sprintf`, `_snprintf`, `vsprintf`, `_vsnprintf`, `printf`, `fprintf`, `_vsnwprintf`, `sscanf`) | done. The engine also runs on UTF-16 format strings and output (`_vsnwprintf`: `%s`/`%c` wide, `%S`/`%C`/`%hs` narrow) |
 | Start-up and exit (`__getmainargs`, `_initterm(_e)`, `_onexit`, `__dllonexit`, `exit`, `_exit`, `_cexit`, `_lock`/`_unlock`, `__set_app_type`, `__p__fmode`/`__p__commode`, `_encode`/`_decode_pointer`, `_configthreadlocale`, `__setusermatherr`, `_XcptFilter`, `_crt_debugger_hook`) | done |
-| Data imports `_adjust_fdiv`, `__initenv` | **loader work (Phase 4)**: the IAT slot must hold the address of a guest variable, not a function thunk |
-| stdio and low-level I/O (`fopen`, `fclose`, `fwrite`, `fseek`, `fflush`, `fprintf`, `__iob_func`, `_open`/`_read`/`_write`/`_lseek`/`_close`/`_filelength`) | next: needs `boot.c`'s file layer exported |
-| Files and directories (`_findfirst64i32`/`_findnext64i32`/`_findclose`, `_mkdir`, `_rmdir`, `_getcwd`, `_chmod`, `rename`, `remove`, `_fullpath`, `_getdrive`, `_getdiskfree`) | next, same |
-| Broken-down time (`_localtime64`, `_gmtime64`, `_localtime32`, `_mktime64`, `_mkgmtime64`, `_difftime64`, `asctime`) | next |
-| Threads (`_beginthreadex`, `_endthreadex`) | next: on `threads.c`'s CreateThread |
+| Data imports `_adjust_fdiv`, `__initenv` | done: `boot.c`'s IAT fill asks `crt_data_import()` first and stores the variable's address instead of a thunk |
+| Low-level I/O (`_open` and its C++ overload, `_read`, `_write`, `_lseek`, `_close`, `_filelength`) | done: a CRT descriptor table over the Win32 handles of `boot.c`'s file layer (`host_file_*`: same paths, case-insensitive resolution and save protection as `CreateFileA`). fd 0-2 are the standard streams (writes go to the log). Text mode, the default unless `_O_BINARY` or `_fmode` says otherwise, turns CRLF into LF and stops at Ctrl-Z on reads, and LF into CRLF on writes |
+| stdio (`fopen`, `fclose`, `fwrite`, `fseek`, `fflush`, `fprintf`, `__iob_func`) | done: unbuffered streams in a guest `_iob` array of 32-byte `FILE`s; `_ptr`/`_cnt` stay 0 (the game imports no `getc`/`putc` that would read them) |
+| Files and directories (`_findfirst64i32`/`_findnext64i32`/`_findclose`, `_mkdir`, `_rmdir`, `_getcwd`, `_chmod`, `rename`, `remove`, `_fullpath`, `_getdrive`, `_getdiskfree`) | done. The current directory is `C:\NFSMW`, the fake module folder `GetCurrentDirectoryA` reports; `rename` overwrites an existing target (Windows refuses) |
+| Broken-down time (`_localtime64`, `_gmtime64`, `_localtime32`, `_mktime64`, `_mkgmtime64`, `_difftime64`, `asctime`) | done: per-thread result buffers, the Mac's time zone, VC8's range (1970 to 3000) and its zero-padded `asctime` day |
+| Threads (`_beginthreadex`, `_endthreadex`) | done: forwarded to `threads.c`'s `CreateThread` / `ExitThread` handlers with the same arguments |
 | Exceptions (`__CxxFrameHandler3`, `_CxxThrowException`, `_except_handler3`, `_except_handler4_common`, `_setjmp3`/`longjmp`, `__RTDynamicCast`, `std::exception`, `terminate`, `type_info` dtor), `raise` | later: needs real call sites |
 | MSVCP80 `std::string` (3) | later: the VC8 object layout has to be confirmed against real call sites |
 
-Coverage (`recomp/import_coverage.py` on the disc exe's import list): **MSVCR80 99 of 149, MSVCP80 0 of 3**; the
-whole exe goes from 229 to 328 of 542 handled. MW's own list is unchanged (287 of 300).
+Coverage (`recomp/import_coverage.py` on the disc exe's import list): **MSVCR80 136 of 149, MSVCP80 0 of 3**; the
+whole exe goes from 229 to 365 of 542 handled. MW's own list is unchanged (287 of 300). The 13 MSVCR80 imports left
+are the C++ exception and SEH machinery and `raise`.
 
 Anything not handled still reaches `host_import`'s "not implemented yet" stop with its name.
 
-Test: `runtime/msvcr_test.c`, driven by `runtime/msvcr_test.py` (no game files): 561 checks through a real guest stack,
+Test: `runtime/msvcr_test.c`, driven by `runtime/msvcr_test.py` (no game files): 721 checks through a real guest stack,
 including the `__cdecl` stack rule after every call, plus a self-check run that must fail. The driver probes
 AddressSanitizer first; where it hangs at start-up (seen with Apple clang 17.0.0 on macOS 26.5.1) it runs with UBSan
-only and adds a run under `libgmalloc` (guard pages around every host allocation).
+only and adds a run under `libgmalloc` (guard pages around every host allocation). The file tests run against real
+files in a scratch directory through a stub of `boot.c`'s file layer, so CRLF translation, Ctrl-Z, append and `_findfirst`
+are checked on actual bytes.

@@ -771,6 +771,67 @@ static int file_close(uint32_t h) {
     free(file_info[k].path); memset(&file_info[k], 0, sizeof file_info[k]); fds[k] = 0;
     return ok;
 }
+// ---------------- file layer for msvcr.c (the CRT's _open/fopen/_findfirst...) ----------------
+// The same paths, handles and save protection as CreateFileA & co.: Win32 handles from file_open, case-insensitive
+// resolve(). Results follow the Win32 calls: 0xFFFFFFFF / -1 on failure with last_error set.
+int host_resolve(const char *win, char *out, size_t n) { return resolve(win, out, n); }
+uint32_t host_file_open(const char *win, uint32_t access, uint32_t share, uint32_t disp) {
+    char host[4096];
+    resolve(win, host, sizeof host);
+    return file_open(win, host, access, share, disp, 0);
+}
+int64_t host_file_read(uint32_t h, uint32_t buf, uint32_t n) {
+    ssize_t r = file_read(h, G + buf, n);
+    if (r < 0) file_error();
+    void threads_note_io(void);
+    threads_note_io();
+    return r;
+}
+int64_t host_file_write(uint32_t h, uint32_t buf, uint32_t n) { return file_write(h, G + buf, n); }
+int64_t host_file_seek(uint32_t h, int64_t distance, int method) {
+    off_t o = file_seek(h, (off_t)distance, method);
+    if (o < 0) file_error();
+    return o;
+}
+int64_t host_file_size(uint32_t h) {
+    struct stat st;
+    int fd = handle_fd(h);
+    if (fd < 0 || fstat(fd, &st)) { last_error = 6; return -1; }
+    return st.st_size;
+}
+int host_file_close(uint32_t h) { return file_close(h); }
+int host_file_flush(uint32_t h) { return file_flush(h); }
+int host_file_remove(const char *win, int dir) {             // DeleteFileA / RemoveDirectoryA
+    char host[4096];
+    resolve(win, host, sizeof host);
+    if (profile_write_denied(host)) { last_error = 5; return 0; }
+    if ((dir ? rmdir(host) : unlink(host))) { file_error(); return 0; }
+    return 1;
+}
+int host_file_rename(const char *from, const char *to) {      // MoveFileA
+    char a[4096], b[4096];
+    resolve(from, a, sizeof a);
+    resolve(to, b, sizeof b);
+    if (profile_write_denied(a) || profile_write_denied(b)) { last_error = 5; return 0; }
+    if (rename(a, b)) { file_error(); return 0; }
+    return 1;
+}
+int host_mkdir(const char *win) {                             // CreateDirectoryA
+    char host[4096];
+    resolve(win, host, sizeof host);
+    if (mkdir(host, 0755)) { if (errno == EEXIST) last_error = 183; else file_error(); return 0; }
+    return 1;
+}
+int host_file_exists(const char *win) { char host[4096]; struct stat st; resolve(win, host, sizeof host); return !stat(host, &st); }
+uint32_t host_find_first(const char *win, uint32_t data) { return find_first(win, data); }   // data: WIN32_FIND_DATAA
+int host_find_next(uint32_t h, uint32_t data) {
+    int k = find_handle(h);
+    if (k >= 0 && find_next((uint32_t)k, data)) return 1;
+    last_error = 18;                                          // ERROR_NO_MORE_FILES
+    return 0;
+}
+void host_find_close(uint32_t h) { int k = find_handle(h); if (k >= 0) { closedir(finds[k].d); finds[k].d = NULL; } }
+
 // MemcardInterfaceImpl save task (007f4f11, thiscall): state 0xb writes header + payload with __write/__close, then sets
 // its result (+0x2f4 = 0 ok / 1 error, +0x2f8 = code) to 0 whatever happened. If a write, sync, close or rename failed
 // during that step, report the failure the game itself uses for a failed open, so state 0xc shows its save-error dialog.
@@ -1751,7 +1812,13 @@ int main(int argc, char **argv) {
         uint32_t va = *(uint32_t *)(s + 12), rs = *(uint32_t *)(s + 16), raw = *(uint32_t *)(s + 20);
         memcpy(G + 0x400000 + va, pe + raw, rs);
     }
-    for (unsigned i = 0; i < speed_import_count; ++i) M32(speed_imports[i].slot) = THUNK_BASE + 4 * i;
+    // Data imports (the CRT's _adjust_fdiv, __initenv) hold the address of a variable, not a function: msvcr.c
+    // supplies those; every other slot gets its thunk.
+    uint32_t crt_data_import(const char *name);
+    for (unsigned i = 0; i < speed_import_count; ++i) {
+        uint32_t data = crt_data_import(speed_imports[i].name);
+        M32(speed_imports[i].slot) = data ? data : THUNK_BASE + 4 * i;
+    }
     online_setup();
     race_setup();
     split_car_pool();

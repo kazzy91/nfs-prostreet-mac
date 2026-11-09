@@ -3,11 +3,18 @@
 // arguments pushed right to left, a return address, and the __cdecl rule checked after each call (the handler pops
 // only the return address). Host hooks (CRT heap, critical sections, exit, call_guest, clocks) are stubs below.
 // MSVCR_TEST_SELFCHECK=1 adds one deliberately wrong expectation; the run must then fail (the checks can fail).
+#include <dirent.h>
+#include <fcntl.h>
+#include <fnmatch.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "host.h"
 
@@ -52,6 +59,85 @@ void crt_fatal(const char *fn, const char *why) { (void)why; fatal_fn = fn; long
 uint64_t host_ticks(void) { static uint64_t t; return t += 5000000; }   // 5 ms per call
 static uint64_t fake_filetime = 116444736000000000ull + 1234567890ull * 10000000ull + 4560000ull;
 uint64_t host_filetime(void) { return fake_filetime; }
+
+// File layer stub: real files under a temporary directory; guest paths "C:\\a\\b" -> <root>/a/b.
+static char root[512];
+static void hostpath(const char *win, char *out, size_t n) {
+    const char *p = win;
+    if (p[0] && p[1] == ':') p += 2;
+    while (*p == '\\' || *p == '/') ++p;
+    if (!strncasecmp(p, "NFSMW", 5) && (p[5] == '\\' || p[5] == '/' || !p[5])) { p += 5; while (*p == '\\' || *p == '/') ++p; }   // like boot.c resolve()
+    snprintf(out, n, "%s/%s", root, p);
+    for (char *q = out + strlen(root); *q; ++q) if (*q == '\\') *q = '/';
+}
+int host_resolve(const char *win, char *out, size_t n) { hostpath(win, out, n); return 0; }
+static int hfd[64];
+static int hf(uint32_t h) { uint32_t k = (h - 0x1000) / 4; return h >= 0x1000 && k < 64 && hfd[k] ? hfd[k] - 1 : -1; }
+uint32_t host_file_open(const char *win, uint32_t access, uint32_t share, uint32_t disp) {
+    (void)share;
+    char p[1024];
+    hostpath(win, p, sizeof p);
+    int fl = (access & 0xC0000000u) == 0xC0000000u ? O_RDWR : (access & 0x40000000u) ? O_WRONLY : O_RDONLY;
+    fl |= disp == 1 ? O_CREAT | O_EXCL : disp == 2 ? O_CREAT | O_TRUNC : disp == 4 ? O_CREAT : disp == 5 ? O_TRUNC : 0;
+    int fd = open(p, fl, 0644), k = 1;
+    if (fd < 0) return 0xFFFFFFFFu;
+    while (hfd[k]) ++k;
+    hfd[k] = fd + 1;
+    return 0x1000 + 4 * (uint32_t)k;
+}
+int64_t host_file_read(uint32_t h, uint32_t buf, uint32_t n) { return hf(h) < 0 ? -1 : read(hf(h), G + buf, n); }
+int64_t host_file_write(uint32_t h, uint32_t buf, uint32_t n) { return hf(h) < 0 ? -1 : write(hf(h), G + buf, n); }
+int64_t host_file_seek(uint32_t h, int64_t d, int m) { return hf(h) < 0 ? -1 : lseek(hf(h), d, m); }
+int64_t host_file_size(uint32_t h) { struct stat st; return hf(h) < 0 || fstat(hf(h), &st) ? -1 : st.st_size; }
+int host_file_close(uint32_t h) { int fd = hf(h); if (fd < 0) return 0; close(fd); hfd[(h - 0x1000) / 4] = 0; return 1; }
+int host_file_remove(const char *win, int dir) { char p[1024]; hostpath(win, p, sizeof p); return (dir ? rmdir(p) : unlink(p)) == 0; }
+int host_file_rename(const char *a, const char *b) { char p[1024], q[1024]; hostpath(a, p, sizeof p); hostpath(b, q, sizeof q); return rename(p, q) == 0; }
+int host_mkdir(const char *win) { char p[1024]; hostpath(win, p, sizeof p); return mkdir(p, 0755) == 0; }
+int host_file_exists(const char *win) { char p[1024]; struct stat st; hostpath(win, p, sizeof p); return !stat(p, &st); }
+static struct { DIR *d; char dir[1024]; char pat[128]; } finds[8];
+static int find_fill(int k, uint32_t data) {
+    struct dirent *e;
+    while ((e = readdir(finds[k].d))) {
+        char p[2048];
+        struct stat st;
+        snprintf(p, sizeof p, "%s/%s", finds[k].dir, e->d_name);
+        if (fnmatch(finds[k].pat, e->d_name, FNM_CASEFOLD) || stat(p, &st)) continue;
+        memset(G + data, 0, 320);
+        M32(data) = S_ISDIR(st.st_mode) ? 0x10 : 0x20;
+        uint64_t ft = ((uint64_t)st.st_mtime + 11644473600ull) * 10000000ull;
+        M64(data + 4) = ft; M64(data + 12) = ft; M64(data + 20) = ft;
+        M32(data + 32) = (uint32_t)st.st_size;
+        snprintf((char *)G + data + 44, 260, "%s", e->d_name);
+        return 1;
+    }
+    return 0;
+}
+uint32_t host_find_first(const char *win, uint32_t data) {
+    char spec[1024];
+    snprintf(spec, sizeof spec, "%s", win);
+    char *slash = strrchr(spec, '\\');
+    int k = 0;
+    while (finds[k].d) ++k;
+    snprintf(finds[k].pat, sizeof finds[k].pat, "%s", slash ? slash + 1 : spec);
+    if (slash) *slash = 0; else spec[0] = 0;
+    hostpath(spec, finds[k].dir, sizeof finds[k].dir);
+    if (!(finds[k].d = opendir(finds[k].dir))) return 0xFFFFFFFFu;
+    if (find_fill(k, data)) return 0x2800 + 4 * (uint32_t)k;
+    closedir(finds[k].d); finds[k].d = NULL;
+    return 0xFFFFFFFFu;
+}
+int host_find_next(uint32_t h, uint32_t data) { int k = (int)(h - 0x2800) / 4; return k >= 0 && k < 8 && finds[k].d && find_fill(k, data); }
+void host_find_close(uint32_t h) { int k = (int)(h - 0x2800) / 4; if (k >= 0 && k < 8 && finds[k].d) { closedir(finds[k].d); finds[k].d = NULL; } }
+// threads.c stub: records CreateThread / ExitThread as the shim forwards them
+static char thread_fn[32];
+static uint32_t thread_args[6];
+int win32_threads(Cpu *cc, const char *fn) {
+    Cpu *c = cc;
+    snprintf(thread_fn, sizeof thread_fn, "%s", fn);
+    if (!strcmp(fn, "CreateThread")) { for (int i = 0; i < 6; ++i) thread_args[i] = arg(c, i); RET(0x2004, 6); }
+    if (!strcmp(fn, "ExitThread")) { thread_args[0] = arg(c, 0); RET(0, 1); }
+    return 0;
+}
 
 // call_guest: guest "functions" 0x5000+k are the test callbacks below. Arguments are read like a guest callee would.
 static uint32_t init_log[8], init_n;
@@ -372,10 +458,203 @@ static void test_time(void) {
     CHECK(c1 == c0 + 5, "clock in milliseconds (%u -> %u)", c0, c1);
 }
 
+
+static size_t host_file(const char *rel, char *buf, size_t cap) {
+    char p[1024];
+    snprintf(p, sizeof p, "%s/%s", root, rel);
+    FILE *f = fopen(p, "rb");
+    if (!f) return (size_t)-1;
+    size_t n = fread(buf, 1, cap, f);
+    fclose(f);
+    return n;
+}
+static void put_host_file(const char *rel, const char *data, size_t n) {
+    char p[1024];
+    snprintf(p, sizeof p, "%s/%s", root, rel);
+    FILE *f = fopen(p, "wb");
+    fwrite(data, 1, n, f);
+    fclose(f);
+}
+
+static void test_files(void) {
+    char hb[256];
+    CHECK(CALL("_mkdir", S("C:\\NFSMW\\save")) == 0 && (int32_t)CALL("_mkdir", S("save")) == -1, "_mkdir, then it exists");
+    // text-mode stream: LF becomes CRLF in the file
+    uint32_t f = CALL("fopen", S("save\\a.txt"), S("w"));
+    CHECK(f != 0, "fopen w");
+    CHECK(CALL("fprintf", f, S("x=%d\n"), 5) == 4, "fprintf returns the length");
+    CHECK(CALL("fwrite", S("ab\n"), 1, 3, f) == 3, "fwrite items");
+    CHECK(CALL("fwrite", S("abcd"), 2, 2, f) == 2, "fwrite counts items of size 2");
+    CHECK(CALL("fflush", f) == 0 && CALL("fflush", 0) == 0, "fflush");
+    CHECK(CALL("fclose", f) == 0, "fclose");
+    size_t n = host_file("save/a.txt", hb, sizeof hb);
+    CHECK(n == 13 && !memcmp(hb, "x=5\r\nab\r\nabcd", 13), "text mode wrote CRLF (%zu bytes)", n);
+    // low-level reads: text strips CR, binary keeps it
+    uint32_t buf = galloc(256);
+    int32_t fd = (int32_t)CALL("_open", S("save\\a.txt"), 0x4000);                 // _O_RDONLY | _O_TEXT
+    CHECK(fd >= 3, "_open %d", fd);
+    CHECK(CALL("_read", (uint32_t)fd, buf, 100) == 11 && !memcmp(G + buf, "x=5\nab\nabcd", 11), "text _read");
+    CHECK(CALL("_read", (uint32_t)fd, buf, 100) == 0, "_read at end");
+    CHECK(CALL("_lseek", (uint32_t)fd, 2, 0) == 2 && CALL("_filelength", (uint32_t)fd) == 13, "_lseek/_filelength");
+    CHECK(CALL("_close", (uint32_t)fd) == 0 && (int32_t)CALL("_close", (uint32_t)fd) == -1, "_close twice");
+    fd = (int32_t)CALL("?_open@@YAHPBDHH@Z", S("save\\a.txt"), 0x8000, 0);          // the C++ overload, _O_BINARY
+    CHECK(CALL("_read", (uint32_t)fd, buf, 100) == 13 && !memcmp(G + buf, "x=5\r\n", 5), "binary _read keeps CR");
+    CALL("_close", (uint32_t)fd);
+    // Ctrl-Z ends a text file; CR at the end of a read chunk peeks at the next byte
+    put_host_file("save/z.txt", "ab\x1A" "cd", 5);
+    fd = (int32_t)CALL("_open", S("save\\z.txt"), 0);
+    CHECK(CALL("_read", (uint32_t)fd, buf, 10) == 2 && CALL("_read", (uint32_t)fd, buf, 10) == 0, "Ctrl-Z is end of file");
+    CALL("_close", (uint32_t)fd);
+    put_host_file("save/cr.txt", "a\r\nb", 4);
+    fd = (int32_t)CALL("_open", S("save\\cr.txt"), 0);
+    CHECK(CALL("_read", (uint32_t)fd, buf, 2) == 2 && !memcmp(G + buf, "a\n", 2), "CRLF across a chunk boundary");
+    CHECK(CALL("_read", (uint32_t)fd, buf, 2) == 1 && G[buf] == 'b', "then the rest");
+    CALL("_close", (uint32_t)fd);
+    CHECK((int32_t)CALL("_open", S("save\\missing.txt"), 0) == -1, "_open of a missing file");
+    CHECK((int32_t)CALL("_open", S("save\\a.txt"), 0x100 | 0x400 | 1) == -1, "_O_CREAT|_O_EXCL on an existing file");
+    // _write in binary and append modes
+    fd = (int32_t)CALL("_open", S("save\\w.bin"), 0x8000 | 0x100 | 0x200 | 1);
+    CHECK(CALL("_write", (uint32_t)fd, S("1\n2"), 3) == 3, "_write binary");
+    CALL("_close", (uint32_t)fd);
+    f = CALL("fopen", S("save\\w.bin"), S("ab"));
+    CALL("fwrite", S("Z"), 1, 1, f);
+    CALL("fclose", f);
+    n = host_file("save/w.bin", hb, sizeof hb);
+    CHECK(n == 4 && !memcmp(hb, "1\n2Z", 4), "binary write + append");
+    f = CALL("fopen", S("save\\w.bin"), S("r+b"));
+    CHECK(f && CALL("fseek", f, 1, 0) == 0 && CALL("fwrite", S("X"), 1, 1, f) == 1, "fseek then write in r+");
+    CALL("fclose", f);
+    n = host_file("save/w.bin", hb, sizeof hb);
+    CHECK(n == 4 && !memcmp(hb, "1X2Z", 4), "r+ overwrote byte 1");
+    CHECK(CALL("fopen", S("save\\nope.txt"), S("r")) == 0, "fopen r of a missing file");
+    CHECK(CALL("fclose", 0x12345) == 0xFFFFFFFFu, "fclose of a non-stream");
+    // standard streams go to the log
+    uint32_t iob = CALL0("__iob_func");
+    CHECK(iob && M32(iob + 32 + 16) == 1 && M32(iob + 64 + 16) == 2, "_iob[1], _iob[2] are fds 1 and 2");
+    CHECK(CALL("fprintf", iob + 64, S("to stderr %s\n"), S("ok")) == 13, "fprintf(stderr)");
+    CHECK(CALL("fwrite", S("hi\n"), 1, 3, iob + 32) == 3, "fwrite(stdout)");
+    CHECK(CALL("_write", 1, S("log\n"), 4) == 4, "_write(1)");
+    // finding files
+    uint32_t info = galloc(296);
+    uint32_t h = CALL("_findfirst64i32", S("save\\*.txt"), info);
+    int seen = 0, count = 0;
+    if (h != 0xFFFFFFFFu) {
+        do {
+            const char *name = (const char *)G + info + 36;
+            ++count;
+            if (!strcmp(name, "a.txt")) { seen |= 1; CHECK(M32(info + 32) == 13 && M32(info) == 0x20 && M64(info + 24) > 1600000000ull, "a.txt info"); }
+            if (!strcmp(name, "z.txt")) seen |= 2;
+            if (!strcmp(name, "cr.txt")) seen |= 4;
+        } while (CALL("_findnext64i32", h, info) == 0);
+    }
+    CHECK(seen == 7 && count == 3, "_findfirst/_findnext saw %d files (mask %d)", count, seen);
+    CHECK(CALL("_findclose", h) == 0, "_findclose");
+    CHECK(CALL("_findfirst64i32", S("save\\*.none"), info) == 0xFFFFFFFFu, "_findfirst with no match");
+    // rename, remove, chmod, rmdir
+    CHECK(CALL("rename", S("save\\a.txt"), S("save\\c.txt")) == 0 && host_file("save/c.txt", hb, sizeof hb) == 13, "rename");
+    CHECK(CALL("_chmod", S("save\\c.txt"), 0x80) == 0 && (int32_t)CALL("_chmod", S("save\\a.txt"), 0x80) == -1, "_chmod");
+    const char *files[] = {"save\\c.txt", "save\\z.txt", "save\\cr.txt", "save\\w.bin"};
+    for (int k = 0; k < 4; ++k) CHECK(CALL("remove", S(files[k])) == 0, "remove %s", files[k]);
+    CHECK((int32_t)CALL("remove", S("save\\c.txt")) == -1, "remove twice");
+    CHECK(CALL("_rmdir", S("save")) == 0 && (int32_t)CALL("_rmdir", S("save")) == -1, "_rmdir");
+    // paths
+    CHECK(CALL("_getcwd", buf, 64) == buf && !strcmp(gs(buf), "C:\\NFSMW"), "_getcwd");
+    CHECK(CALL("_getcwd", buf, 4) == 0, "_getcwd too small");
+    uint32_t a = CALL("_getcwd", 0, 0);
+    CHECK(a && !strcmp(gs(a), "C:\\NFSMW"), "_getcwd allocates");
+    CHECK(CALL("_fullpath", buf, S("data\\..\\x/./y.txt"), 260) == buf && !strcmp(gs(buf), "C:\\NFSMW\\x\\y.txt"), "_fullpath relative: %s", gs(buf));
+    a = CALL("_fullpath", 0, S("\\abs\\p"), 0);
+    CHECK(a && !strcmp(gs(a), "C:\\abs\\p"), "_fullpath rooted: %s", a ? gs(a) : "(null)");
+    CALL("_fullpath", buf, S("D:\\q\\.\\r\\..\\s"), 260);
+    CHECK(!strcmp(gs(buf), "D:\\q\\s"), "_fullpath with a drive: %s", gs(buf));
+    CALL("_fullpath", buf, S("C:\\.."), 260);
+    CHECK(!strcmp(gs(buf), "C:\\"), "_fullpath stops at the root: %s", gs(buf));
+    CHECK(CALL0("_getdrive") == 3, "_getdrive");
+    uint32_t df = galloc(16);
+    CHECK(CALL("_getdiskfree", 3, df) == 0 && M32(df + 12) == 512, "_getdiskfree");
+}
+
+static void test_wide(void) {
+    // _vsnwprintf: UTF-16 format and output; %s wide, %S narrow, %c wide, %hs narrow in a wide format
+    uint32_t fmt = galloc(64), w = galloc(16), out = galloc(64), va = galloc(32);
+    const uint16_t f16[] = {'%', 's', '=', '%', 'd', ' ', '%', 'S', ' ', '%', 'c', '%', 'h', 's', '|', '%', '5', 's', 0};
+    memcpy(G + fmt, f16, sizeof f16);
+    const uint16_t name[] = {'n', 0xE9, 0x416, 0};                    // "né" + Cyrillic Zhe
+    memcpy(G + w, name, sizeof name);
+    M32(va) = w; M32(va + 4) = 42; M32(va + 8) = S("ok"); M32(va + 12) = 0x416; M32(va + 16) = S("x"); M32(va + 20) = w;
+    uint32_t n = CALL("_vsnwprintf", out, 32, fmt, va);
+    const uint16_t want[] = {'n', 0xE9, 0x416, '=', '4', '2', ' ', 'o', 'k', ' ', 0x416, 'x', '|', ' ', ' ', 'n', 0xE9, 0x416, 0};
+    CHECK(n == 18 && !memcmp(G + out, want, sizeof want), "_vsnwprintf output (%u units)", n);
+    CHECK(CALL("_vsnwprintf", out, 3, fmt, va) == 0xFFFFFFFFu, "_vsnwprintf truncates with -1");
+    // narrow output of a wide argument: Latin-1 kept, wider characters become '?'
+    uint32_t nb = galloc(16);
+    CALL("sprintf", nb, S("%ls"), w);
+    CHECK(!strcmp(gs(nb), "n\xE9?"), "%%ls narrows to Latin-1");
+}
+
+static void test_time2(void) {
+    uint32_t t = galloc(8), tm;
+    M64(t) = 1234567890;                                              // 2009-02-13 23:31:30 UTC, a Friday
+    tm = CALL("_gmtime64", t);
+    CHECK(tm && M32(tm) == 30 && M32(tm + 4) == 31 && M32(tm + 8) == 23 && M32(tm + 12) == 13 && M32(tm + 16) == 1 &&
+          M32(tm + 20) == 109 && M32(tm + 24) == 5 && M32(tm + 28) == 43 && M32(tm + 32) == 0, "_gmtime64 fields");
+    CHECK(CALL("_localtime64", t) == tm && M32(tm + 8) == 23, "_localtime64 (TZ=UTC) shares the per-thread buffer");
+    uint32_t t32 = galloc(4);
+    M32(t32) = 86400;
+    CHECK(CALL("_localtime32", t32) && M32(tm + 12) == 2 && M32(tm + 20) == 70, "_localtime32");
+    M64(t) = (uint64_t)-1;
+    CHECK(CALL("_localtime64", t) == 0, "negative time gives NULL");
+    M64(t) = 32535216000ull;
+    CHECK(CALL("_gmtime64", t) == 0, "past 3000-12-31 gives NULL");
+    uint32_t mt = galloc(36);
+    const int32_t in[9] = {0, 0, 0, 32, 0, 109, 0, 0, 0};             // 32 January 2009
+    for (int k = 0; k < 9; ++k) M32(mt + 4 * (uint32_t)k) = (uint32_t)in[k];
+    CHECK(call("_mktime64", 1, A(mt)) && c->eax == 1233446400u && c->edx == 0, "_mktime64 = %u", c->eax);
+    CHECK(M32(mt + 12) == 1 && M32(mt + 16) == 1 && M32(mt + 24) == 0, "_mktime64 normalizes to 1 February (Sunday)");
+    M32(mt + 12) = 32; M32(mt + 16) = 0;
+    CHECK(call("_mkgmtime64", 1, A(mt)) && c->eax == 1233446400u, "_mkgmtime64");
+    CALL("_difftime64", 100, 0, 40, 0);
+    CHECK(pop_st0() == 60.0, "_difftime64");
+    M64(t) = 1234567890;
+    tm = CALL("_gmtime64", t);
+    uint32_t s = CALL("asctime", tm);
+    CHECK(s && !strcmp(gs(s), "Fri Feb 13 23:31:30 2009\n"), "asctime: %s", s ? gs(s) : "(null)");
+    M32(tm + 12) = 2;
+    CHECK(!strcmp(gs(CALL("asctime", tm)), "Fri Feb 02 23:31:30 2009\n"), "asctime pads the day with a zero (VC8)");
+    uint32_t tb = galloc(16);
+    CALL("_ftime64", tb);
+    CHECK(M16(tb + 10) == 0 && M16(tb + 12) == 0, "_ftime64 time zone under TZ=UTC");
+}
+
+static void test_threads(void) {
+    uint32_t tid = galloc(4);
+    CHECK(CALL("_beginthreadex", 0, 0x10000, 0x401000, 0x55, 4, tid) == 0x2004, "_beginthreadex returns CreateThread's handle");
+    CHECK(!strcmp(thread_fn, "CreateThread") && thread_args[1] == 0x10000 && thread_args[2] == 0x401000 && thread_args[3] == 0x55 &&
+          thread_args[4] == 4 && thread_args[5] == tid, "CreateThread got the same arguments");
+    CALL("_endthreadex", 7);
+    CHECK(!strcmp(thread_fn, "ExitThread") && thread_args[0] == 7, "_endthreadex -> ExitThread(7)");
+}
+
+uint32_t crt_data_import(const char *name);
+static void test_data_imports(void) {
+    uint32_t fd = crt_data_import("MSVCR80.dll!_adjust_fdiv"), env = crt_data_import("MSVCR80.dll!__initenv");
+    CHECK(fd && M32(fd) == 0, "_adjust_fdiv is a zero variable");
+    uint32_t argc = galloc(4), argv = galloc(4), envp = galloc(4);
+    CALL("__getmainargs", argc, argv, envp, 0, 0);
+    CHECK(env && M32(env) == M32(envp) && M32(M32(env)) == 0, "__initenv points at the (empty) environment __getmainargs returns");
+    CHECK(crt_data_import("MSVCR80.dll!malloc") == 0 && crt_data_import("KERNEL32.dll!__initenv") == 0, "functions and other DLLs are not data");
+    CHECK(crt_data_import("MSVCR80.dll!_adjust_fdiv") == fd, "stable address");
+}
+
 int main(void) {
     G = mmap(0, 1ull << 32, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
     if (G == MAP_FAILED) { printf("cannot reserve guest memory\n"); return 2; }
     c->cw = 0x027F;
+    setenv("TZ", "UTC", 1);
+    tzset();
+    const char *tmp = getenv("MSVCR_TEST_TMP") ? getenv("MSVCR_TEST_TMP") : getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp";
+    snprintf(root, sizeof root, "%s/msvcr_test.XXXXXX", tmp);
+    if (!mkdtemp(root)) { printf("cannot create a scratch directory\n"); return 2; }
     test_memory();
     test_strings();
     test_conversion();
@@ -385,7 +664,13 @@ int main(void) {
     test_sort();
     test_startup();
     test_time();
+    test_files();
+    test_wide();
+    test_time2();
+    test_threads();
+    test_data_imports();
     CHECK(!win32_msvcr(c, "NoSuchCrtFunction"), "unknown functions are not handled");
+    rmdir(root);
     if (getenv("MSVCR_TEST_SELFCHECK")) SP("43", "%d", 42);   // deliberately wrong: must be reported
     printf("%s: %d checks, %d failing\n", fails ? "FAIL" : "ok", checks, fails);
     return fails ? 1 : 0;

@@ -9,7 +9,7 @@
     RaiseException, UnhandledExceptionFilter, ShellExecuteA, the 9 TAPI32 line* functions);
 (c) a synthetic PE (pe_report_test.build_pe): GetTickCount handled, an unknown KERNEL32 name missing, WS2_32 #3
     handled through the ordinal switch, WS2_32 #12 missing, WSOCK32 #3 missing with the WS2_32 alias note, MSVCR80
-    malloc handled by msvcr.c and fopen still missing, DSOUND #1 handled by its exact "#1" compare;
+    malloc handled by msvcr.c and _setjmp3 still missing, DSOUND #1 handled by its exact "#1" compare;
 (d) prefix tests are not counted: HeapFoo (heap.c's negative "Heap" gate) and VirtualFoo (boot.c's "Virtual" trace)
     stay missing.
 Check of the check: with the WS2 ordinal switch ignored, (c)'s WS2_32 #3 must turn missing.
@@ -57,11 +57,11 @@ def main():
 
     synth = pe_report_test.build_pe(imports={
         "KERNEL32.dll": ["GetTickCount", "NoSuchFunctionAnywhere", "HeapFoo", "VirtualFoo"],
-        "WS2_32.dll": ["#3", "#12"], "WSOCK32.dll": ["#3"], "MSVCR80.dll": ["malloc", "fopen"], "DSOUND.dll": ["#1"]})
+        "WS2_32.dll": ["#3", "#12"], "WSOCK32.dll": ["#3"], "MSVCR80.dll": ["malloc", "_setjmp3"], "DSOUND.dll": ["#1"]})
     rows = ic.coverage(pe_report.parse(synth)["imports"], host)
     miss = missing_of(rows)
     expect = {("KERNEL32.dll", "NoSuchFunctionAnywhere"), ("KERNEL32.dll", "HeapFoo"), ("KERNEL32.dll", "VirtualFoo"),
-              ("WS2_32.dll", "#12"), ("WSOCK32.dll", "#3"), ("MSVCR80.dll", "fopen")}
+              ("WS2_32.dll", "#12"), ("WSOCK32.dll", "#3"), ("MSVCR80.dll", "_setjmp3")}
     check("(c) synthetic PE: handled/missing split", set(miss) == expect, sorted(set(miss) ^ expect))
     check("(c) WSOCK32 #3 carries the WS2_32 alias note", "WS2_32 #3" in miss.get(("WSOCK32.dll", "#3"), ""), miss)
     check("(d) prefix gates/traces not counted", ("KERNEL32.dll", "HeapFoo") in miss and ("KERNEL32.dll", "VirtualFoo") in miss)

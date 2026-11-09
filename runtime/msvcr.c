@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "host.h"
 
@@ -17,6 +18,21 @@ uint32_t crt_heap_size(uint32_t a);
 // threads.c: guest CRITICAL_SECTION enter/leave (recursive, GIL-aware), for _lock/_unlock.
 void crt_cs_enter(Cpu *c, uint32_t cs);
 void crt_cs_leave(uint32_t cs);
+// boot.c's file layer: the same handles, paths and save protection as CreateFileA & co (failures: 0xFFFFFFFF / -1 / 0).
+int host_resolve(const char *win, char *out, size_t n);
+uint32_t host_file_open(const char *win, uint32_t access, uint32_t share, uint32_t disp);
+int64_t host_file_read(uint32_t h, uint32_t buf, uint32_t n);
+int64_t host_file_write(uint32_t h, uint32_t buf, uint32_t n);
+int64_t host_file_seek(uint32_t h, int64_t distance, int method);
+int64_t host_file_size(uint32_t h);
+int host_file_close(uint32_t h);
+int host_file_remove(const char *win, int dir);
+int host_file_rename(const char *from, const char *to);
+int host_mkdir(const char *win);
+int host_file_exists(const char *win);
+uint32_t host_find_first(const char *win, uint32_t data);
+int host_find_next(uint32_t h, uint32_t data);
+void host_find_close(uint32_t h);
 // Ends the run like ExitProcess (boot.c / app.m); tests provide their own.
 void crt_exit_process(Cpu *c, uint32_t code);
 void crt_fatal(const char *fn, const char *why) __attribute__((noreturn));
@@ -99,20 +115,25 @@ static double c_atof(uint32_t s, uint32_t *end) {
 
 // ---------------- printf engine ----------------
 typedef struct {
-    uint32_t dst, cap;   // guest output (cap bytes at most); dst 0 = host log
-    uint32_t n;          // characters produced (all, also beyond cap)
+    uint32_t dst, cap;   // guest output (cap units at most); dst 0 = host log
+    uint32_t n;          // units produced (all, also beyond cap)
+    int wide;            // guest output is UTF-16 (wprintf family)
     char line[512];
     int ln;
 } Out;
 static void out_flush(Out *o) {
     if (o->ln) { fprintf(stderr, "guest: %.*s\n", o->ln, o->line); o->ln = 0; }
 }
-static void out_c(Out *o, char ch) {
-    if (o->dst) { if (o->n < o->cap) M8(o->dst + o->n) = (uint8_t)ch; }
-    else if (ch == '\n' || o->ln == (int)sizeof o->line) { out_flush(o); if (ch != '\n') o->line[o->ln++] = ch; }
+// One output unit. Narrow output keeps Latin-1 and turns anything wider into '?', like MW's code-page identity mapping.
+static void out_u(Out *o, uint16_t u) {
+    char ch = u > 0xFF ? '?' : (char)u;
+    if (o->dst) {
+        if (o->n < o->cap) { if (o->wide) M16(o->dst + 2 * o->n) = u; else M8(o->dst + o->n) = (uint8_t)ch; }
+    } else if (ch == '\n' || o->ln == (int)sizeof o->line) { out_flush(o); if (ch != '\n') o->line[o->ln++] = ch; }
     else o->line[o->ln++] = ch;
     ++o->n;
 }
+static void out_c(Out *o, char ch) { out_u(o, (uint8_t)ch); }
 static void out_s(Out *o, const char *s, size_t n) { while (n--) out_c(o, *s++); }
 static void out_pad(Out *o, char ch, int n) { while (n-- > 0) out_c(o, ch); }
 
@@ -153,14 +174,20 @@ static size_t nonfinite(double d, char t, int prec, int plus, int space, char *b
     return n;
 }
 
-static void format(Out *o, uint32_t f, VA *v) {
+// fw: the format string is UTF-16 (wprintf family). In wide formats %s/%c take wide arguments and %S/%C narrow ones;
+// h forces narrow, l/w force wide (MSVC rules).
+static void format(Out *o, uint32_t f, int fw, VA *v) {
+    const uint32_t step = fw ? 2 : 1;
+#define FC(i) (fw ? M16(f + 2 * (i)) : M8(f + (i)))
     for (;;) {
-        char ch = (char)M8(f++);
-        if (!ch) break;
-        if (ch != '%') { out_c(o, ch); continue; }
+        uint16_t u = FC(0);
+        f += step;
+        if (!u) break;
+        if (u != '%') { out_u(o, u); continue; }
+        char ch;
         int left = 0, plus = 0, space = 0, alt = 0, zero = 0;
-        for (;; ++f) {
-            ch = (char)M8(f);
+        for (;; f += step) {
+            ch = (char)FC(0);
             if (ch == '-') left = 1;
             else if (ch == '+') plus = 1;
             else if (ch == ' ') space = 1;
@@ -169,32 +196,36 @@ static void format(Out *o, uint32_t f, VA *v) {
             else break;
         }
         int width = 0, prec = -1;
-        if (M8(f) == '*') { ++f; int32_t w = (int32_t)va32(v); if (w < 0) { left = 1; w = -w; } width = w; }
-        else while (c_isdigit(M8(f))) width = width * 10 + (M8(f++) - '0');
-        if (M8(f) == '.') {
-            ++f;
+        if (FC(0) == '*') { f += step; int32_t w = (int32_t)va32(v); if (w < 0) { left = 1; w = -w; } width = w; }
+        else while (c_isdigit(FC(0))) { width = width * 10 + (FC(0) - '0'); f += step; }
+        if (FC(0) == '.') {
+            f += step;
             prec = 0;
-            if (M8(f) == '*') { ++f; int32_t p = (int32_t)va32(v); prec = p < 0 ? -1 : p; }
-            else while (c_isdigit(M8(f))) prec = prec * 10 + (M8(f++) - '0');
+            if (FC(0) == '*') { f += step; int32_t p = (int32_t)va32(v); prec = p < 0 ? -1 : p; }
+            else while (c_isdigit(FC(0))) { prec = prec * 10 + (FC(0) - '0'); f += step; }
         }
         if (width > 65536) width = 65536;
         if (prec > 4096) prec = 4096;
         int size = 0;   // 'h', 'l' (also w), 64 (ll, I64), 'L'
-        ch = (char)M8(f);
-        if (ch == 'h') { size = 'h'; ++f; }
-        else if (ch == 'l') { ++f; if (M8(f) == 'l') { ++f; size = 64; } else size = 'l'; }
-        else if (ch == 'L') { size = 'L'; ++f; }
-        else if (ch == 'w') { size = 'l'; ++f; }
+        ch = (char)FC(0);
+        if (ch == 'h') { size = 'h'; f += step; }
+        else if (ch == 'l') { f += step; if (FC(0) == 'l') { f += step; size = 64; } else size = 'l'; }
+        else if (ch == 'L') { size = 'L'; f += step; }
+        else if (ch == 'w') { size = 'l'; f += step; }
         else if (ch == 'I') {
-            if (M8(f + 1) == '6' && M8(f + 2) == '4') { size = 64; f += 3; }
-            else if (M8(f + 1) == '3' && M8(f + 2) == '2') f += 3;
-            else ++f;
+            if (FC(1) == '6' && FC(2) == '4') { size = 64; f += 3 * step; }
+            else if (FC(1) == '3' && FC(2) == '2') f += 3 * step;
+            else f += step;
         }
-        char t = (char)M8(f++);
-        if (!t) break;
+        uint16_t tu = FC(0);
+        f += step;
+        if (!tu) break;
+        char t = tu > 0x7F ? '?' : (char)tu;
         char hf[16], *body = NULL, small[64];
+        uint16_t *units = NULL;   // %s/%c: UTF-16 units, emitted as they are (padding counts units)
         size_t blen = 0;
         int numeric = 0, zero_ok = 0, owned = 0;
+        int wsrc = size == 'l' ? 1 : size == 'h' ? 0 : (t == 's' || t == 'c') ? fw : !fw;   // %s/%c argument width
         switch (t) {
         case 'd': case 'i': case 'u': case 'o': case 'x': case 'X': {
             long long sv = 0;
@@ -237,21 +268,19 @@ static void format(Out *o, uint32_t f, VA *v) {
         }
         case 'c': case 'C': {
             uint32_t r = va32(v);
-            small[0] = (t == 'C' || size == 'l') && (r & 0xFFFF) > 0xFF ? '?' : (char)r;
-            body = small;
+            units = malloc(sizeof *units);
+            units[0] = wsrc ? (uint16_t)r : (uint8_t)r;
             blen = 1;
             break;
         }
         case 's': case 'S': {
             uint32_t p = va32(v);
-            int wide = t == 'S' || size == 'l';
             if (!p) { body = (char *)"(null)"; blen = 6; if (prec >= 0 && (size_t)prec < blen) blen = (size_t)prec; break; }
             size_t n = 0;
-            if (wide) while ((prec < 0 || n < (size_t)prec) && M16(p + 2 * n)) ++n;
+            if (wsrc) while ((prec < 0 || n < (size_t)prec) && M16(p + 2 * n)) ++n;
             else while ((prec < 0 || n < (size_t)prec) && M8(p + n)) ++n;
-            body = malloc(n + 1);
-            owned = 1;
-            for (size_t k = 0; k < n; ++k) { uint16_t w = wide ? M16(p + 2 * k) : M8(p + k); body[k] = w > 0xFF ? '?' : (char)w; }
+            units = malloc((n ? n : 1) * sizeof *units);
+            for (size_t k = 0; k < n; ++k) units[k] = wsrc ? M16(p + 2 * k) : M8(p + k);
             blen = n;
             break;
         }
@@ -269,6 +298,13 @@ static void format(Out *o, uint32_t f, VA *v) {
             break;
         }
         int pad = width > (int)blen ? width - (int)blen : 0;
+        if (units) {
+            if (!left) out_pad(o, ' ', pad);
+            for (size_t k = 0; k < blen; ++k) out_u(o, units[k]);
+            if (left) out_pad(o, ' ', pad);
+            free(units);
+            continue;
+        }
         if (left) { out_s(o, body, blen); out_pad(o, ' ', pad); }
         else if (zero && zero_ok && numeric) {
             size_t pre = 0;
@@ -280,13 +316,21 @@ static void format(Out *o, uint32_t f, VA *v) {
         } else { out_pad(o, ' ', pad); out_s(o, body, blen); }
         if (owned) free(body);
     }
+#undef FC
 }
 
 // vsnprintf-style front end: writes at most cap chars to dst; returns the full length.
 static uint32_t format_to(uint32_t dst, uint32_t cap, uint32_t fmt, uint32_t va) {
     Out o = {.dst = dst, .cap = cap};
     VA v = {va};
-    format(&o, fmt, &v);
+    format(&o, fmt, 0, &v);
+    return o.n;
+}
+// The same for UTF-16 output and format (_vsnwprintf): cap and the result count wchar_t units.
+static uint32_t wformat_to(uint32_t dst, uint32_t cap, uint32_t fmt, uint32_t va) {
+    Out o = {.dst = dst, .cap = cap, .wide = 1};
+    VA v = {va};
+    format(&o, fmt, 1, &v);
     return o.n;
 }
 
@@ -464,11 +508,22 @@ static uint32_t control87(Cpu *c, uint32_t value, uint32_t mask) {
 // ---------------- per-thread and process state ----------------
 static __thread uint32_t rand_seed = 1, rand_seeded;
 static __thread uint32_t strtok_next;
-static uint32_t fmode_var, commode_var, onexit_tab[256];
+static uint32_t fmode_var, commode_var, envp_var, onexit_tab[256];
 static unsigned onexit_n;
 static int locale_mode = 2;                    // _DISABLE_PER_THREAD_LOCALE
 static uint32_t crt_locks[64];                 // guest CRITICAL_SECTIONs for _lock(n)
 static uint64_t clock_t0;
+
+static uint32_t crt_envp(void) { if (!envp_var) envp_var = galloc(4); return envp_var; }   // an empty environment
+
+// Data imports: the IAT slot holds the variable's address (boot.c's IAT fill asks here first). 0 = a function import.
+uint32_t crt_data_import(const char *name) {
+    if (strncmp(name, "MSVCR80", 7) || !strchr(name, '!')) return 0;
+    const char *fn = strchr(name, '!') + 1;
+    if (!strcmp(fn, "_adjust_fdiv")) { static uint32_t v; if (!v) v = galloc(4); return v; }   // 0: no Pentium FDIV workaround
+    if (!strcmp(fn, "__initenv")) { static uint32_t v; if (!v) { v = galloc(4); M32(v) = crt_envp(); } return v; }
+    return 0;
+}
 
 static void run_onexit(Cpu *c) {
     while (onexit_n) {
@@ -641,7 +696,7 @@ static int crt_misc(Cpu *c, const char *fn) {
     if (!strcmp(fn, "printf")) {
         Out o = {0};
         VA v = {c->esp + 8};
-        format(&o, arg(c, 0), &v);
+        format(&o, arg(c, 0), 0, &v);
         out_flush(&o);
         CRET(o.n);
     }
@@ -670,8 +725,11 @@ static int crt_misc(Cpu *c, const char *fn) {
         uint32_t p = arg(c, 0);
         M64(p) = ft / 10000000u;
         M16(p + 8) = (uint16_t)(ft / 10000u % 1000u);
-        M16(p + 10) = 0;                             // minutes west of UTC: the guest sees UTC
-        M16(p + 12) = 0;
+        time_t now = (time_t)(ft / 10000000u);
+        struct tm lt;
+        localtime_r(&now, &lt);
+        M16(p + 10) = (uint16_t)(int16_t)(-lt.tm_gmtoff / 60);   // minutes west of UTC, the Mac's time zone
+        M16(p + 12) = (uint16_t)(lt.tm_isdst > 0);
         CRETV();
     }
     if (!strcmp(fn, "getenv")) CRET(0);              // the guest's environment is empty
@@ -686,15 +744,14 @@ static int crt_misc(Cpu *c, const char *fn) {
         CRET(prev);
     }
     if (!strcmp(fn, "__getmainargs")) {              // (int *argc, char ***argv, char ***envp, int wildcard, _startupinfo *)
-        static uint32_t argv, envp;
+        static uint32_t argv;
         if (!argv) {
             argv = galloc(8);
             M32(argv) = gstr("nfs.exe");
-            envp = galloc(4);
         }
         M32(arg(c, 0)) = 1;
         M32(arg(c, 1)) = argv;
-        M32(arg(c, 2)) = envp;
+        M32(arg(c, 2)) = crt_envp();
         CRET(0);
     }
     if (!strcmp(fn, "_initterm") || !strcmp(fn, "_initterm_e")) {   // [begin, end) of function pointers
@@ -732,6 +789,352 @@ static int crt_misc(Cpu *c, const char *fn) {
     return 0;
 }
 
+
+// ---------------- low-level I/O: CRT file descriptors over Win32 handles ----------------
+// fd 0-2 are the standard streams: writes go to the log, reads see end of file. Text mode (the default unless
+// _O_BINARY or _fmode says binary) turns CRLF into LF and stops at Ctrl-Z on reads, and LF into CRLF on writes.
+#define O_WRONLY_ 0x1
+#define O_RDWR_ 0x2
+#define O_APPEND_ 0x8
+#define O_CREAT_ 0x100
+#define O_TRUNC_ 0x200
+#define O_EXCL_ 0x400
+#define O_TEXT_ 0x4000
+#define O_BINARY_ 0x8000
+#define CRT_NFD 64
+static struct { uint32_t h; uint8_t open, text, append, eof; } fdtab[CRT_NFD] = {{0, 1, 1, 0, 1}, {0, 1, 1, 0, 0}, {0, 1, 1, 0, 0}};
+
+static int crt_open(const char *path, uint32_t oflag) {
+    int fd = 3;
+    while (fd < CRT_NFD && fdtab[fd].open) ++fd;
+    if (fd == CRT_NFD) return -1;                                       // EMFILE
+    uint32_t mode = oflag & 3, access = mode == 0 ? 0x80000000u : mode == O_WRONLY_ ? 0x40000000u : 0xC0000000u;
+    uint32_t cr = oflag & (O_CREAT_ | O_TRUNC_ | O_EXCL_), disp;
+    if ((cr & O_CREAT_) && (cr & O_EXCL_)) disp = 1;                    // CREATE_NEW
+    else if ((cr & O_CREAT_) && (cr & O_TRUNC_)) disp = 2;              // CREATE_ALWAYS
+    else if (cr & O_CREAT_) disp = 4;                                   // OPEN_ALWAYS
+    else if (cr & O_TRUNC_) disp = 5;                                   // TRUNCATE_EXISTING
+    else disp = 3;                                                      // OPEN_EXISTING
+    uint32_t h = host_file_open(path, access, 3, disp);
+    if (h == 0xFFFFFFFFu) return -1;
+    int text = (oflag & O_BINARY_) ? 0 : (oflag & O_TEXT_) ? 1 : !(fmode_var && (M32(fmode_var) & O_BINARY_));
+    fdtab[fd].h = h; fdtab[fd].open = 1; fdtab[fd].text = (uint8_t)text; fdtab[fd].append = !!(oflag & O_APPEND_); fdtab[fd].eof = 0;
+    return fd;
+}
+static int fd_ok(int32_t fd) { return fd >= 0 && fd < CRT_NFD && fdtab[fd].open; }
+static int32_t crt_read(int32_t fd, uint32_t buf, uint32_t n) {
+    if (!fd_ok(fd)) return -1;
+    if (fd < 3 || fdtab[fd].eof || !n) return 0;
+    int64_t r = host_file_read(fdtab[fd].h, buf, n);
+    if (r < 0) return -1;
+    if (!fdtab[fd].text) return (int32_t)r;
+    uint32_t in = 0, out = 0;
+    for (; in < (uint32_t)r; ++in) {
+        uint8_t ch = M8(buf + in);
+        if (ch == 0x1A) { fdtab[fd].eof = 1; host_file_seek(fdtab[fd].h, (int64_t)in - r, 1); break; }   // Ctrl-Z ends a text file
+        if (ch == '\r') {
+            if (in + 1 < (uint32_t)r) { if (M8(buf + in + 1) == '\n') continue; }
+            else {                                                       // CR at the end of the chunk: peek one byte
+                uint32_t peek = crt_heap_alloc(1);
+                int64_t k = host_file_read(fdtab[fd].h, peek, 1);
+                if (k == 1 && M8(peek) == '\n') ch = '\n';
+                else if (k == 1) host_file_seek(fdtab[fd].h, -1, 1);
+                crt_heap_free(peek);
+            }
+        }
+        M8(buf + out++) = ch;
+    }
+    return (int32_t)out;
+}
+static void log_bytes(int32_t fd, uint32_t buf, uint32_t n) {
+    Out o = {0};
+    for (uint32_t k = 0; k < n; ++k) out_c(&o, (char)M8(buf + k));
+    out_flush(&o);
+    (void)fd;
+}
+static int32_t crt_write(int32_t fd, uint32_t buf, uint32_t n) {
+    if (!fd_ok(fd)) return -1;
+    if (fd < 3) { log_bytes(fd, buf, n); return (int32_t)n; }
+    if (!n) return 0;
+    if (fdtab[fd].append) host_file_seek(fdtab[fd].h, 0, 2);
+    if (!fdtab[fd].text) { int64_t r = host_file_write(fdtab[fd].h, buf, n); return r < 0 ? -1 : (int32_t)r; }
+    uint32_t lf = 0;
+    for (uint32_t k = 0; k < n; ++k) lf += M8(buf + k) == '\n';
+    uint32_t tmp = crt_heap_alloc(n + lf), o = 0;
+    if (!tmp) return -1;
+    for (uint32_t k = 0; k < n; ++k) { if (M8(buf + k) == '\n') M8(tmp + o++) = '\r'; M8(tmp + o++) = M8(buf + k); }
+    int64_t r = host_file_write(fdtab[fd].h, tmp, o);
+    crt_heap_free(tmp);
+    return r < 0 || (uint32_t)r != o ? -1 : (int32_t)n;
+}
+static int32_t crt_lseek(int32_t fd, int32_t off, int32_t origin) {
+    if (!fd_ok(fd) || fd < 3 || origin < 0 || origin > 2) return -1;
+    int64_t r = host_file_seek(fdtab[fd].h, off, origin);
+    if (r < 0 || r > 0x7FFFFFFF) return -1;
+    fdtab[fd].eof = 0;
+    return (int32_t)r;
+}
+static int32_t crt_close(int32_t fd) {
+    if (!fd_ok(fd)) return -1;
+    if (fd < 3) return 0;
+    int ok = host_file_close(fdtab[fd].h);
+    memset(&fdtab[fd], 0, sizeof fdtab[fd]);
+    return ok ? 0 : -1;
+}
+
+// ---------------- stdio: unbuffered FILE streams ----------------
+// struct _iobuf (32 bytes): +0 _ptr, +4 _cnt, +8 _base, +12 _flag, +16 _file, +20 _charbuf, +24 _bufsiz, +28 _tmpfname.
+// Nothing is buffered, so _ptr/_cnt stay 0; the game imports no getc/putc that would read them directly.
+#define IOREAD 0x1
+#define IOWRT 0x2
+#define IOEOF 0x10
+#define IOERR 0x20
+#define IORW 0x80
+#define CRT_NFILE 20
+static uint32_t iob;
+static uint32_t iob_init(void) {
+    if (!iob) {
+        iob = galloc(32 * CRT_NFILE);
+        for (int k = 0; k < 3; ++k) { M32(iob + 32 * k + 12) = k ? IOWRT : IOREAD; M32(iob + 32 * k + 16) = (uint32_t)k; }
+    }
+    return iob;
+}
+static int file_ok(uint32_t f) { iob_init(); return f >= iob && f < iob + 32 * CRT_NFILE && (f - iob) % 32 == 0 && M32(f + 12); }
+static uint32_t crt_fopen(const char *path, const char *mode) {
+    iob_init();
+    uint32_t f = 0;
+    for (int k = 3; k < CRT_NFILE && !f; ++k) if (!M32(iob + 32 * k + 12)) f = iob + 32 * (uint32_t)k;
+    if (!f) return 0;
+    uint32_t oflag, flag;
+    if (mode[0] == 'r') { oflag = 0; flag = IOREAD; }
+    else if (mode[0] == 'w') { oflag = O_WRONLY_ | O_CREAT_ | O_TRUNC_; flag = IOWRT; }
+    else if (mode[0] == 'a') { oflag = O_WRONLY_ | O_CREAT_ | O_APPEND_; flag = IOWRT; }
+    else return 0;
+    for (const char *m = mode + 1; *m; ++m) {
+        if (*m == '+') { oflag = (oflag & ~3u) | O_RDWR_; flag = IORW; }
+        else if (*m == 'b') oflag |= O_BINARY_;
+        else if (*m == 't') oflag |= O_TEXT_;
+    }
+    int fd = crt_open(path, oflag);
+    if (fd < 0) return 0;
+    memset(G + f, 0, 32);
+    M32(f + 12) = flag;
+    M32(f + 16) = (uint32_t)fd;
+    return f;
+}
+
+static int crt_files(Cpu *c, const char *fn) {
+    // ---- low-level I/O ----
+    if (!strcmp(fn, "_open") || !strcmp(fn, "?_open@@YAHPBDHH@Z")) CRET((uint32_t)crt_open(gs(arg(c, 0)), arg(c, 1)));
+    if (!strcmp(fn, "_read")) CRET((uint32_t)crt_read((int32_t)arg(c, 0), arg(c, 1), arg(c, 2)));
+    if (!strcmp(fn, "_write")) CRET((uint32_t)crt_write((int32_t)arg(c, 0), arg(c, 1), arg(c, 2)));
+    if (!strcmp(fn, "_lseek")) CRET((uint32_t)crt_lseek((int32_t)arg(c, 0), (int32_t)arg(c, 1), (int32_t)arg(c, 2)));
+    if (!strcmp(fn, "_close")) CRET((uint32_t)crt_close((int32_t)arg(c, 0)));
+    if (!strcmp(fn, "_filelength")) {
+        int32_t fd = (int32_t)arg(c, 0);
+        int64_t n = fd_ok(fd) && fd >= 3 ? host_file_size(fdtab[fd].h) : -1;
+        CRET(n < 0 || n > 0x7FFFFFFF ? 0xFFFFFFFFu : (uint32_t)n);
+    }
+    // ---- stdio ----
+    if (!strcmp(fn, "__iob_func")) CRET(iob_init());
+    if (!strcmp(fn, "fopen")) CRET(crt_fopen(gs(arg(c, 0)), gs(arg(c, 1))));
+    if (!strcmp(fn, "fclose")) {
+        uint32_t f = arg(c, 0);
+        if (!file_ok(f)) CRET(0xFFFFFFFFu);
+        int32_t r = (f - iob) / 32 < 3 ? 0 : crt_close((int32_t)M32(f + 16));
+        if ((f - iob) / 32 >= 3) memset(G + f, 0, 32);
+        CRET(r ? 0xFFFFFFFFu : 0);
+    }
+    if (!strcmp(fn, "fwrite")) {                     // (buf, size, count, stream) -> items written
+        uint32_t buf = arg(c, 0), size = arg(c, 1), count = arg(c, 2), f = arg(c, 3);
+        uint64_t total = (uint64_t)size * count;
+        if (!total) CRET(0);
+        if (!file_ok(f) || total > 0x7FFFFFFF) CRET(0);
+        int32_t r = crt_write((int32_t)M32(f + 16), buf, (uint32_t)total);
+        if (r < 0) { M32(f + 12) |= IOERR; CRET(0); }
+        CRET((uint32_t)r / size);
+    }
+    if (!strcmp(fn, "fseek")) {                      // (stream, offset, origin) -> 0 / -1
+        uint32_t f = arg(c, 0);
+        if (!file_ok(f)) CRET(0xFFFFFFFFu);
+        M32(f + 12) &= ~(uint32_t)IOEOF;
+        CRET(crt_lseek((int32_t)M32(f + 16), (int32_t)arg(c, 1), (int32_t)arg(c, 2)) < 0 ? 0xFFFFFFFFu : 0);
+    }
+    if (!strcmp(fn, "fflush")) CRET(!arg(c, 0) || file_ok(arg(c, 0)) ? 0 : 0xFFFFFFFFu);   // nothing is buffered
+    if (!strcmp(fn, "fprintf")) {                    // (stream, fmt, ...)
+        uint32_t f = arg(c, 0);
+        if (!file_ok(f)) CRET(0xFFFFFFFFu);
+        int32_t fd = (int32_t)M32(f + 16);
+        if (fd < 3) {
+            Out o = {0};
+            VA v = {c->esp + 12};
+            format(&o, arg(c, 1), 0, &v);
+            out_flush(&o);
+            CRET(o.n);
+        }
+        uint32_t n = format_to(0x10, 0, arg(c, 1), c->esp + 12);      // length only: cap 0 writes nothing (dst just non-zero)
+        uint32_t tmp = crt_heap_alloc(n + 1);
+        if (!tmp) CRET(0xFFFFFFFFu);
+        format_to(tmp, n, arg(c, 1), c->esp + 12);
+        int32_t r = crt_write(fd, tmp, n);
+        crt_heap_free(tmp);
+        if (r < 0) { M32(f + 12) |= IOERR; CRET(0xFFFFFFFFu); }
+        CRET(n);
+    }
+    if (!strcmp(fn, "_vsnwprintf")) {                // (wchar_t *dst, count, fmt, va): count in wchar_t units
+        uint32_t d = arg(c, 0), cap = arg(c, 1);
+        uint32_t n = wformat_to(d, cap, arg(c, 2), arg(c, 3));
+        if (n < cap) M16(d + 2 * n) = 0;
+        CRET(n <= cap ? n : 0xFFFFFFFFu);
+    }
+    // ---- files and directories ----
+    if (!strcmp(fn, "_findfirst64i32") || !strcmp(fn, "_findnext64i32")) {
+        static uint32_t wfd;                         // WIN32_FIND_DATAA scratch
+        if (!wfd) wfd = galloc(320);
+        int first = fn[5] == 'f';
+        uint32_t info = arg(c, 1), h = first ? host_find_first(gs(arg(c, 0)), wfd) : arg(c, 0);
+        if (first ? h == 0xFFFFFFFFu : !host_find_next(h, wfd)) CRET(0xFFFFFFFFu);
+        // struct _finddata64i32_t: attrib +0, time_create +8, time_access +16, time_write +24, size +32, name[260] +36
+        memset(G + info, 0, 296);
+        M32(info) = M32(wfd);
+        for (int k = 0; k < 3; ++k) {
+            uint64_t ft = M64(wfd + 4 + 8 * (uint32_t)k);
+            M64(info + 8 + 8 * (uint32_t)k) = ft ? (uint64_t)(ft / 10000000u - 11644473600ull) : 0;
+        }
+        M32(info + 32) = M32(wfd + 32);
+        memcpy(G + info + 36, G + wfd + 44, 260);
+        CRET(first ? h : 0);
+    }
+    if (!strcmp(fn, "_findclose")) { host_find_close(arg(c, 0)); CRET(0); }
+    if (!strcmp(fn, "_mkdir")) CRET(host_mkdir(gs(arg(c, 0))) ? 0 : 0xFFFFFFFFu);
+    if (!strcmp(fn, "_rmdir")) CRET(host_file_remove(gs(arg(c, 0)), 1) ? 0 : 0xFFFFFFFFu);
+    if (!strcmp(fn, "remove")) CRET(host_file_remove(gs(arg(c, 0)), 0) ? 0 : 0xFFFFFFFFu);
+    if (!strcmp(fn, "rename")) CRET(host_file_rename(gs(arg(c, 0)), gs(arg(c, 1))) ? 0 : 0xFFFFFFFFu);
+    if (!strcmp(fn, "_chmod")) CRET(host_file_exists(gs(arg(c, 0))) ? 0 : 0xFFFFFFFFu);   // permissions are not modelled
+    if (!strcmp(fn, "_getcwd") || !strcmp(fn, "_fullpath")) {
+        // The guest's current directory is the fake module folder boot.c reports (GetCurrentDirectoryA: C:\NFSMW).
+        static const char cwd[] = "C:\\NFSMW";
+        char path[1024];
+        uint32_t buf = arg(c, 0), max;
+        if (fn[1] == 'g') { snprintf(path, sizeof path, "%s", cwd); max = arg(c, 1); }
+        else {                                       // _fullpath(abs, rel, max): absolute, '\', "." and ".." resolved
+            const char *rel = arg(c, 1) ? gs(arg(c, 1)) : "";
+            char raw[1024];
+            if (!*rel) snprintf(raw, sizeof raw, "%s", cwd);
+            else if (rel[0] && rel[1] == ':') snprintf(raw, sizeof raw, "%s", rel);
+            else if (rel[0] == '\\' || rel[0] == '/') snprintf(raw, sizeof raw, "C:%s", rel);
+            else snprintf(raw, sizeof raw, "%s\\%s", cwd, rel);
+            for (char *p = raw; *p; ++p) if (*p == '/') *p = '\\';
+            size_t n = 0;
+            path[n++] = raw[0]; path[n++] = ':';
+            char *save = NULL;
+            for (char *tok = strtok_r(raw + 2, "\\", &save); tok; tok = strtok_r(NULL, "\\", &save)) {
+                if (!strcmp(tok, ".")) continue;
+                if (!strcmp(tok, "..")) { while (n > 2 && path[n - 1] != '\\') --n; if (n > 2) --n; continue; }
+                if (n + strlen(tok) + 2 >= sizeof path) break;
+                path[n++] = '\\';
+                memcpy(path + n, tok, strlen(tok));
+                n += strlen(tok);
+            }
+            if (n == 2) path[n++] = '\\';
+            path[n] = 0;
+            max = arg(c, 2);
+        }
+        uint32_t len = (uint32_t)strlen(path);
+        if (!buf) {                                  // _getcwd: max(maxlen, needed); _fullpath: _MAX_PATH (260) or needed
+            uint32_t want = fn[1] == 'g' ? max : 260;
+            if (want < len + 1) want = len + 1;
+            if (!(buf = crt_heap_alloc(want))) CRET(0);
+        }
+        else if (len + 1 > max) CRET(0);             // ERANGE
+        memcpy(G + buf, path, len + 1);
+        CRET(buf);
+    }
+    if (!strcmp(fn, "_getdrive")) CRET(3);           // C:
+    if (!strcmp(fn, "_getdiskfree")) {               // (drive, struct _diskfree_t *): the values GetDiskFreeSpaceA reports
+        uint32_t p = arg(c, 1);
+        M32(p) = 0x01FFFFFF; M32(p + 4) = 0x00FFFFFF; M32(p + 8) = 8; M32(p + 12) = 512;
+        CRET(0);
+    }
+    return 0;
+}
+
+// ---------------- broken-down time ----------------
+// struct tm: nine ints (sec, min, hour, mday, mon, year, wday, yday, isdst). Results live in a per-thread guest
+// buffer, as in the multithreaded CRT. Local time is the Mac's time zone.
+static __thread uint32_t tm_buf, asc_buf;
+static void tm_put(uint32_t p, const struct tm *t) {
+    const int v[9] = {t->tm_sec, t->tm_min, t->tm_hour, t->tm_mday, t->tm_mon, t->tm_year, t->tm_wday, t->tm_yday, t->tm_isdst > 0};
+    for (int k = 0; k < 9; ++k) M32(p + 4 * (uint32_t)k) = (uint32_t)v[k];
+}
+static void tm_get(uint32_t p, struct tm *t) {
+    memset(t, 0, sizeof *t);
+    t->tm_sec = (int32_t)M32(p); t->tm_min = (int32_t)M32(p + 4); t->tm_hour = (int32_t)M32(p + 8);
+    t->tm_mday = (int32_t)M32(p + 12); t->tm_mon = (int32_t)M32(p + 16); t->tm_year = (int32_t)M32(p + 20);
+    t->tm_isdst = (int32_t)M32(p + 32);
+}
+#define TIME64_MAX 32535215999ll   // 3000-12-31 23:59:59, the VC8 limit
+static int crt_time(Cpu *c, const char *fn) {
+    if (!strcmp(fn, "_localtime64") || !strcmp(fn, "_gmtime64") || !strcmp(fn, "_localtime32")) {
+        int64_t t = !strcmp(fn, "_localtime32") ? (int64_t)(int32_t)M32(arg(c, 0)) : (int64_t)M64(arg(c, 0));
+        if (t < 0 || t > TIME64_MAX) CRET(0);
+        time_t tt = (time_t)t;
+        struct tm r;
+        if (!(fn[1] == 'g' ? gmtime_r(&tt, &r) : localtime_r(&tt, &r))) CRET(0);
+        if (!tm_buf) tm_buf = galloc(36);
+        tm_put(tm_buf, &r);
+        CRET(tm_buf);
+    }
+    if (!strcmp(fn, "_mktime64") || !strcmp(fn, "_mkgmtime64")) {   // normalizes the struct in place
+        struct tm r;
+        tm_get(arg(c, 0), &r);
+        if (fn[3] == 'g') r.tm_isdst = 0;
+        time_t t = fn[3] == 'g' ? timegm(&r) : mktime(&r);
+        if (t == (time_t)-1 || t < 0 || t > TIME64_MAX) CRET64(-1);
+        tm_put(arg(c, 0), &r);
+        CRET64((int64_t)t);
+    }
+    if (!strcmp(fn, "_difftime64")) {                // (time1, time0), two __time64_t
+        int64_t t1 = (int64_t)((uint64_t)arg(c, 0) | (uint64_t)arg(c, 1) << 32), t0 = (int64_t)((uint64_t)arg(c, 2) | (uint64_t)arg(c, 3) << 32);
+        CRETF((double)(t1 - t0));
+    }
+    if (!strcmp(fn, "asctime")) {                    // "Wed Jan 02 02:03:55 1980\n": VC8 pads the day with a zero
+        static const char days[] = "SunMonTueWedThuFriSat", mons[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+        uint32_t p = arg(c, 0);
+        int32_t wday = (int32_t)M32(p + 24), mon = (int32_t)M32(p + 16);
+        if (wday < 0 || wday > 6 || mon < 0 || mon > 11) CRET(0);
+        if (!asc_buf) asc_buf = galloc(32);
+        snprintf(gs(asc_buf), 32, "%.3s %.3s %02d %02d:%02d:%02d %d\n", days + 3 * wday, mons + 3 * mon, (int32_t)M32(p + 12),
+                 (int32_t)M32(p + 8), (int32_t)M32(p + 4), (int32_t)M32(p), (int32_t)M32(p + 20) + 1900);
+        CRET(asc_buf);
+    }
+    return 0;
+}
+
+// ---------------- threads ----------------
+// Calls a __stdcall import handler from host code with a fresh guest frame; returns eax.
+static uint32_t call_import(Cpu *c, int (*h)(Cpu *, const char *), const char *fn, int n, const uint32_t *args) {
+    uint32_t sp = c->esp;
+    for (int i = n - 1; i >= 0; --i) { c->esp -= 4; M32(c->esp) = args[i]; }
+    c->esp -= 4;
+    M32(c->esp) = 0xFEEDF00D;
+    if (!h(c, fn)) crt_fatal(fn, "no host handler");
+    c->esp = sp;
+    return c->eax;
+}
+static int crt_threads(Cpu *c, const char *fn) {
+    if (!strcmp(fn, "_beginthreadex")) {             // (security, stack, start, arg, initflag, thrdaddr*): CreateThread's
+        uint32_t a[6] = {arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5)};   // arguments in the same order
+        CRET(call_import(c, win32_threads, "CreateThread", 6, a));
+    }
+    if (!strcmp(fn, "_endthreadex")) {
+        uint32_t a[1] = {arg(c, 0)};
+        call_import(c, win32_threads, "ExitThread", 1, a);
+        CRETV();
+    }
+    return 0;
+}
+
 int win32_msvcr(Cpu *c, const char *fn) {
-    return crt_mem_str(c, fn) || crt_math(c, fn) || crt_misc(c, fn);
+    return crt_mem_str(c, fn) || crt_math(c, fn) || crt_misc(c, fn) || crt_files(c, fn) || crt_time(c, fn) || crt_threads(c, fn);
 }
