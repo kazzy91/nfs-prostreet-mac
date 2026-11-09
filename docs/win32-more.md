@@ -37,17 +37,32 @@ routed to `win32_ws2`.
 
 ## Coverage
 
-`recomp/import_coverage.py` on the disc exe's import list: **444 of 542** handled (229 before the CRT shim and these
-additions). MW's own list is unchanged (287 of 300). The 98 left:
+`recomp/import_coverage.py` on the disc exe's import list: **452 of 542** handled (229 before the CRT shim and these
+additions). MW's own list is unchanged (287 of 300). The 90 left:
 
 | Group | Imports | Why they wait |
 |---|---|---|
 | Probably SecuROM's own | KERNEL32 pipes, console, `DeviceIoControl`, `QueryDosDeviceA`, `GetVolumeInformationA`, `OpenProcess`, `FlushInstructionCache`, `GetExitCodeProcess`; ADVAPI32 services, SIDs/tokens, event log | expected to vanish with an exe without SecuROM |
 | Exceptions | `RaiseException`, `RtlUnwind`, `UnhandledExceptionFilter`; MSVCR80 C++/SEH (13); MSVCP80 `std::string` (3) | need real call sites |
 | Window state | 30 USER32 calls | need `user32.m`'s window model and real call sites |
-| Registry | `RegCreateKeyExA`, `RegEnumKeyExA`, `RegEnumValueA`, `RegDeleteKeyA`, `RegDeleteValueA`, `RegQueryInfoKeyA`, `RegQueryValueA`, `RegSetValueA` | next: belong with `boot.c`'s registry |
 | d3dx textures | `D3DXCreateCubeTextureFromFileInMemory`, `D3DXCreateVolumeTextureFromFileInMemory`, `D3DXSaveSurfaceToFileA`/`InMemory` | need DDS parsing and `d3d9.m`'s texture objects |
 | SHELL32 | `ShellExecuteA`, `ShellExecuteExA` | opening web pages; a stub that fails is enough |
+
+## Registry (`runtime/registry.c`)
+
+The registry moved out of `boot.c` unchanged into `runtime/registry.c` (`win32_registry`, routed like the other
+handler modules; `registry_load()` at start-up). The model is the same: a fixed set of known keys, values in memory,
+and the game's key saved to `USERDATA/registry.txt`. The known keys are still MW's; the ProStreet key comes with the
+game profile. Two changes:
+- `reg_open` also takes one of our key handles as the root (a relative open), and an empty subkey under a handle is that
+  key. MW never did either successfully, so no existing call changes.
+- Added: `RegCreateKeyExA` (opens a known key, `REG_OPENED_EXISTING_KEY`), `RegEnumKeyExA` (the distinct next path
+  components of the known keys), `RegEnumValueA`, `RegQueryInfoKeyA`, `RegDeleteValueA` (the value table stays dense),
+  `RegDeleteKeyA` (removes the key's values; the key itself stays known), `RegQueryValueA`/`RegSetValueA` (the
+  unnamed default value, saved as `sz =text`; an unset default reads as "").
+
+`runtime/registry_test.c` pins MW's behaviour first (known keys, `ERROR_MORE_DATA`, `registry.txt` writes and reload,
+`BOOT_REG`), then the additions: 115 checks.
 
 ## Tests
 

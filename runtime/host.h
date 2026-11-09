@@ -49,6 +49,8 @@ int win32_dsound(Cpu *c, const char *fn);   // dsound.c
 int win32_dinput(Cpu *c, const char *fn);   // dinput.c
 int win32_ws2(Cpu *c, const char *fn);      // ws2_32.c (WS2_32 and NETAPI32)
 int win32_msvcr(Cpu *c, const char *fn);    // msvcr.c (MSVCR80 and MSVCP80, the dynamic VC++ 2005 runtime)
+int win32_registry(Cpu *c, const char *fn); // registry.c (ADVAPI32 Reg*)
+void registry_load(void);                   // registry.c: USERDATA/registry.txt, BOOT_REG
 int win32_more(Cpu *c, const char *fn);     // win32_more.c (KERNEL32/USER32/ADVAPI32/VERSION/RPCRT4/ole32 additions for ProStreet)
 uint32_t host_load_library(Cpu *c, const char *name);   // boot.c: LoadLibraryA
 int threads_close(uint32_t h);

@@ -146,7 +146,7 @@ is MW (X360 near shadows).
 
 | File | State |
 |---|---|
-| `boot.c` | Generic loader/dispatch/`host_import`, case-insensitive files, registry, cpuid, int3/div traps. MW parts: Lua resume `006069E8`, career save task `f_007F4F11`, registry key "Need for Speed Most Wanted", `BOOT_RACE` SkipFE globals, split-screen car pool, X360 music handles, private-car paths |
+| `boot.c` | Generic loader/dispatch/`host_import`, case-insensitive files, cpuid, int3/div traps (the registry has since moved to `registry.c`; MW's key names are still in it). MW parts: Lua resume `006069E8`, career save task `f_007F4F11`, registry key "Need for Speed Most Wanted", `BOOT_RACE` SkipFE globals, split-screen car pool, X360 music handles, private-car paths |
 | `imports.c` | Generated from `speed.exe`: regenerate from `nfs.exe` |
 | `threads.c`, `heap.c`, `interp.c` | Generic (threads.c has two MW thread diag hooks) |
 | `user32.m`, `dinput.c` | Generic; user32.m reads MW's `GAMEFLOW_STATE` (`00925E90`) and sim time for timing/pause |
