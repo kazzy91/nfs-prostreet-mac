@@ -888,7 +888,15 @@ static int v_UpdateTexture(Cpu *c) {           // (this, src, dst): copy system-
     }
     RET(D3D_OK, 3);
 }
-static int v_GetRenderTargetData(Cpu *c) { if (diag_on) diag_event("GetRenderTargetData not implemented (no-op) @%08X", M32(c->esp)); RET(D3D_OK, 3); }
+// (this, render target, destination): a system-memory surface (or SYSTEMMEM texture level) of the same size and format.
+static int v_GetRenderTargetData(Cpu *c) {
+    Obj *d = obj(arg(c, 2));
+    if (!d || d->kind != K_SURFACE || !arg(c, 1)) RET(D3DERR_INVALIDCALL, 3);
+    uint32_t pitch, mem = surface_mem(d, &pitch);
+    if (!render_readback(arg(c, 1), mem, pitch, d->w, d->h, d->fmt)) RET(D3DERR_INVALIDCALL, 3);
+    if (d->parent) obj(d->parent)->dirty = 1; else d->dirty = 1;   // the memory changed under any GPU copy of it
+    RET(D3D_OK, 3);
+}
 static int v_GetFrontBufferData(Cpu *c) { if (diag_on) diag_event("GetFrontBufferData not implemented (no-op) @%08X", M32(c->esp)); RET(D3D_OK, 3); }
 static int v_StretchRect(Cpu *c) { render_stretch(arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5)); RET(D3D_OK, 6); }
 static int v_ColorFill(Cpu *c) { if (diag_on) diag_event("ColorFill not implemented (no-op) @%08X", M32(c->esp)); RET(D3D_OK, 4); }

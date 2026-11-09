@@ -4184,8 +4184,34 @@ void render_stretch(uint32_t src, uint32_t src_rect, uint32_t dst, uint32_t dst_
         }
     }
 }
-void render_readback(uint32_t src, uint32_t dst) {
-    (void)src; (void)dst;   // GetRenderTargetData: not needed for the front end yet
+// GetRenderTargetData: the render target's pixels into a system-memory surface (guest memory `mem`, `pitch`, w x h,
+// D3D format fmt). Synchronous, like D3D9's: the frame so far is committed and waited for, and the next draw starts a
+// new command buffer with a loading pass (the drawshot pattern). The copy goes through a BGRA8 quad, so a float back
+// buffer is clamped to [0, 1] and an upscaled one is scaled back to the surface's size. 1 = copied.
+int readback_format_ok(uint32_t fmt);
+int readback_store(const uint8_t *bgra, uint32_t w, uint32_t h, uint8_t *dst, uint32_t pitch, uint32_t fmt);
+int render_readback(uint32_t src, uint32_t mem, uint32_t pitch, uint32_t w, uint32_t h, uint32_t fmt) {
+    if (!mem || !w || !h || !readback_format_ok(fmt)) return 0;
+    NSUInteger lv, sl;
+    id<MTLTexture> t = surface_target(src, &lv, &sl);
+    if (t && t.sampleCount > 1) { RenderTex *r = surface_rt(src); msaa_resolve(r); t = r->tex; lv = 0; sl = 0; }
+    if (!t || t.textureType != MTLTextureType2D || lv || sl) return 0;   // a 2D target's top level (back buffer, RT textures)
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:w height:h mipmapped:NO];
+    d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    d.storageMode = MTLStorageModeShared;
+    id<MTLTexture> dst = [mtl newTextureWithDescriptor:d];
+    if (!dst) return 0;
+    blit_quad(t, MTLRegionMake2D(0, 0, t.width, t.height), dst, 0, 0, MTLRegionMake2D(0, 0, w, h), t.width != w || t.height != h);   // ends the pass
+    [cmd commit];
+    [cmd waitUntilCompleted];
+    cmd = nil;
+    uint8_t *px = malloc((size_t)w * h * 4);
+    if (!px) return 0;
+    [dst getBytes:px bytesPerRow:(NSUInteger)w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
+    int ok = readback_store(px, w, h, G + mem, pitch, fmt);
+    free(px);
+    if (diag_on) diag_event("GetRenderTargetData %ux%u fmt %u from %lux%lu: %s", w, h, fmt, (unsigned long)t.width, (unsigned long)t.height, ok ? "copied" : "failed");
+    return ok;
 }
 
 void save_png(id<MTLTexture> t, const char *path, int keep_alpha) {

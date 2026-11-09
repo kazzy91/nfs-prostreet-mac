@@ -62,7 +62,25 @@ and MW's hooks on those methods (the env-cube sizing in `CreateCubeTexture`) app
   and DDS written natively; PNG and JPEG through ImageIO (the exe's `nfsProStreet%03d.jpg` suggests the game saves
   JPEG screenshots this way); HDR and PFM are refused. An optional rectangle crops. The in-memory version returns an
   `ID3DXBuffer` (QueryInterface, AddRef, Release, GetBufferPointer, GetBufferSize) on the resource heap. Screenshots
-  also need the frame in the surface's memory: MW's `GetRenderTargetData` is still a no-op, which is Phase 6 work.
+  also need the frame in the surface's memory, which `GetRenderTargetData` now provides (below).
+
+## `GetRenderTargetData` readback
+
+MW left `IDirect3DDevice9::GetRenderTargetData` a no-op. It now copies a render target into a system-memory surface (or
+SYSTEMMEM texture level), the usual way to read a frame back for a screenshot:
+- `d3d9.m`: finds the destination's memory and pitch (`surface_mem`), calls `render_readback`, and marks the
+  destination dirty. A missing surface or a failed copy returns `D3DERR_INVALIDCALL`.
+- `render.m` (`render_readback`): synchronous, as in D3D9. It takes the target's texture (resolving MSAA first), draws
+  it with `blit_quad` into a shared BGRA8 texture of the destination's size, commits and waits, and leaves `cmd = nil`,
+  so the next draw starts a new command buffer with a loading pass (the pattern of the `drawshot` diagnostic). An
+  upscaled target is scaled back to the surface's size, and a float (HDR) back buffer is clamped to [0, 1]. Sources
+  are 2D targets at level 0 (the back buffer, render-target textures); cube faces and lower levels are refused.
+- `readback.c` (`readback_store`): BGRA8 into A8R8G8B8, X8R8G8B8, A8B8G8R8, X8B8G8R8, R8G8B8, R5G6B5, X1R5G5B5,
+  A1R5G5B5 at the destination's pitch. X formats get 0xFF; 5/6-bit channels are rounded.
+
+`runtime/readback_test.c` checks the conversion (31 checks). The GPU half needs the full runtime and a rendered frame,
+so it has only been compile-checked; it gets exercised once the game renders (Phase 5/6). A full readback stalls the
+frame by design; if the game reads back every frame, that will show up in Phase 6 timing.
 
 `runtime/d3dx_tex_test.c` (253 checks) runs against a fake `IDirect3DDevice9` whose locked pitches are wider than the
 rows, and decodes the PNG back through ImageIO.

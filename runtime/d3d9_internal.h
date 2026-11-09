@@ -79,7 +79,7 @@ void render_clear(uint32_t count, uint32_t rects, uint32_t flags, uint32_t color
 void render_present(void);
 void render_set_gamma(const uint16_t ramp[768]);   // render_present.m: the game's gamma ramp (Brightness), applied at present
 void render_stretch(uint32_t src, uint32_t src_rect, uint32_t dst, uint32_t dst_rect, uint32_t filter);
-void render_readback(uint32_t src, uint32_t dst);
+int render_readback(uint32_t src, uint32_t mem, uint32_t pitch, uint32_t w, uint32_t h, uint32_t fmt);   // GetRenderTargetData (render.m)
 void render_release(Obj *o);
 void render_panes_changed(Obj *o);  // discard cached streams that depend on this buffer
 void render_targets_changed(void);

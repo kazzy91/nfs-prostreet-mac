@@ -46,7 +46,7 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
   system answers, stateless USER32, GUIDs; WS2 ordinals and WSOCK32 routing; 3 d3dx9_34 functions. Imports handled on
   the disc exe's list: 456/542. The registry moved out of `boot.c` into `runtime/registry.c` (same behaviour) and
   gained the 8 missing calls; `runtime/d3dx_tex.c` loads DDS cube/volume textures and saves surfaces (BMP/TGA/PPM/DDS,
-  PNG/JPEG via ImageIO). What's left needs an exe without SecuROM: real call sites for C++ exceptions/SEH, `std::string`
+  PNG/JPEG via ImageIO); `GetRenderTargetData` now reads frames back (`readback.c`). What's left needs an exe without SecuROM: real call sites for C++ exceptions/SEH, `std::string`
   and window-state USER32, and confirming which imports were SecuROM's.
 - `.gitignore` blocks game executables/DLLs/disc images, game data formats, a game folder dropped into the checkout,
   build output (`recomp/out/`, `**/build/`, `*.o`, `*.a`, app bundles), dumps and `USERDATA/`. It's a safety net:
@@ -117,7 +117,7 @@ the Phase 0 exe.
 
 ### Phase 6: menus
 - Front end renders correctly: ProStreet's shaders through `host/shaders`, the new d3dx9_34 functions, missing D3D9
-  paths (`ColorFill`, `GetRenderTargetData`, `UpdateSurface` if used).
+  paths (`ColorFill`, `UpdateSurface` if used; `GetRenderTargetData` is implemented but untested on a real frame).
 - Keyboard/mouse via DirectInput, then controllers. DirectSound audio and music. Profiles/saves in `USERDATA`.
 - **Exit:** navigate every FE menu, change and persist options, create/load a profile.
 

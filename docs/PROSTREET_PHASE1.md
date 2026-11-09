@@ -77,7 +77,7 @@ Gone compared with MW: GDI32 (MW 12), TAPI32 (MW 9).
 
 The COM side matters more than the flat imports. MW's `d3d9.m` implements full vtables for IDirect3D9,
 IDirect3DDevice9 (119 methods), textures, cube/volume textures, surfaces, VB/IB, declarations, shaders, state blocks
-and queries. MW leaves `UpdateSurface`, `GetRenderTargetData` and `ColorFill` as no-ops; ProStreet may call them
+and queries. MW leaves `UpdateSurface`, `GetRenderTargetData` and `ColorFill` as no-ops (`GetRenderTargetData` has since been implemented, see `docs/win32-more.md`); ProStreet may call them
 (`D3DXSaveSurfaceToFile*` implies render-target readback). The SM1–3 → MSL translator (`host/shaders`) is proven only
 on MW's 108 shaders.
 
