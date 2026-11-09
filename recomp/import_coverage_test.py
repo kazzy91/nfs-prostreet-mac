@@ -42,7 +42,7 @@ def main():
             fails.append(label)
 
     host = ic.Host()
-    want = [(["d3dx9"], ["d3dx", "d3dx_effect"]), (["d3d9"], ["win32_d3d9"]), (["DSOUND"], ["win32_dsound"]),
+    want = [(["d3dx9"], ["d3dx", "d3dx_effect", "d3dx_tex"]), (["d3d9"], ["win32_d3d9"]), (["DSOUND"], ["win32_dsound"]),
             (["DINPUT8"], ["win32_dinput"]), (["WS2_32", "WSOCK32", "NETAPI32"], ["win32_ws2"]),
             (["USER32", "GDI32"], ["win32_user32", "win32_more"]), (["MSVCR80", "MSVCP80"], ["win32_msvcr"])]
     check("(a) routing read from boot.c", host.routes == want and host.fallback == ["win32_threads", "win32_heap", "win32_registry", "win32", "win32_more"],

@@ -44,8 +44,10 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
   sites. Phase 0 tools: `recomp/pe_report.py`, `recomp/import_coverage.py`.
 - Win32 additions (`runtime/win32_more.c`, `docs/win32-more.md`): wide/64-bit file calls, file mapping, resources,
   system answers, stateless USER32, GUIDs; WS2 ordinals and WSOCK32 routing; 3 d3dx9_34 functions. Imports handled on
-  the disc exe's list: 452/542. The registry moved out of `boot.c` into `runtime/registry.c` (same behaviour) and
-  gained the 8 missing calls. Next exe-independent piece: d3dx textures-from-memory.
+  the disc exe's list: 456/542. The registry moved out of `boot.c` into `runtime/registry.c` (same behaviour) and
+  gained the 8 missing calls; `runtime/d3dx_tex.c` loads DDS cube/volume textures and saves surfaces (BMP/TGA/PPM/DDS,
+  PNG/JPEG via ImageIO). What's left needs an exe without SecuROM: real call sites for C++ exceptions/SEH, `std::string`
+  and window-state USER32, and confirming which imports were SecuROM's.
 - `.gitignore` blocks game executables/DLLs/disc images, game data formats, a game folder dropped into the checkout,
   build output (`recomp/out/`, `**/build/`, `*.o`, `*.a`, app bundles), dumps and `USERDATA/`. It's a safety net:
   still check `git status`. Add new derived-output paths to it as they appear.
@@ -57,7 +59,7 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
 - `d3dx9_34` instead of `d3dx9_26`: 7 new functions (texture-from-memory, `SaveSurfaceToFile*`, shader profiles).
 - Wide-char and 64-bit file APIs, file mapping, resource loading, `VERSION.dll`, `WSOCK32` aliases, PunkBuster
   (stub: online only).
-- 229 of 542 imports matched a MW handler before the CRT shim and the Win32 additions (452 with them). Many of the
+- 229 of 542 imports matched a MW handler before the CRT shim and the Win32 additions (456 with them). Many of the
   missing ADVAPI32/USER32/KERNEL32 ones are probably SecuROM's own. Recount on an exe without SecuROM.
 - Same fixed-address model: image base `0x00400000`, relocations stripped. The guest memory layout constants
   (`HEAP_BASE 0x30000000`, `SERVER_BASE 0x02000000`, thunks at `0xF0000000`) clear ProStreet's image (ends below

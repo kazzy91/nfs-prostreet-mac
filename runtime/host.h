@@ -42,6 +42,7 @@ uint32_t host_fn(HostFn fn, const char *name);
 int win32_user32(Cpu *c, const char *fn);   // user32.m (also GDI32 stubs)
 int d3dx(Cpu *c, const char *fn);           // d3dx.c
 int d3dx_effect(Cpu *c, const char *fn);    // d3dx_effect.c
+int d3dx_tex(Cpu *c, const char *fn);       // d3dx_tex.c: DDS cube/volume loading, SaveSurfaceToFile (d3dx9_34)
 int win32_threads(Cpu *c, const char *fn);  // threads.c
 int win32_heap(Cpu *c, const char *fn);     // heap.c: Heap*, GlobalAlloc/GlobalFree
 int win32_d3d9(Cpu *c, const char *fn);     // d3d9.m

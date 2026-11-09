@@ -28,7 +28,7 @@ def asan_works(tmp):
         return False
 
 
-def run(name, sources, selfcheck_env):
+def run(name, sources, selfcheck_env, ldflags=()):
     srcs = [os.path.join(HERE, s) for s in sources]
     inc = ["-I", os.path.join(HERE, "..", "recomp"), "-I", HERE]
     with tempfile.TemporaryDirectory() as tmp:
@@ -36,7 +36,7 @@ def run(name, sources, selfcheck_env):
         san = "address,undefined" if asan_works(tmp) else "undefined"
         if san == "undefined":
             print("note: AddressSanitizer hangs at start-up with this toolchain; running with UBSan only")
-        b = subprocess.run(["clang", *CF, f"-fsanitize={san}", *inc, *srcs, "-o", exe], capture_output=True, text=True)
+        b = subprocess.run(["clang", *CF, f"-fsanitize={san}", *inc, *srcs, *ldflags, "-o", exe], capture_output=True, text=True)
         if b.returncode:
             print(b.stdout + b.stderr)
             print("FAIL: build")
@@ -57,7 +57,7 @@ def run(name, sources, selfcheck_env):
         print("self-check: the deliberately wrong expectation was reported (1 failing)")
         if san == "undefined" and os.path.exists(GMALLOC):
             plain = os.path.join(tmp, name + "_plain")
-            b = subprocess.run(["clang", *CF[:-1], "-O1", *inc, *srcs, "-o", plain], capture_output=True, text=True)
+            b = subprocess.run(["clang", *CF[:-1], "-O1", *inc, *srcs, *ldflags, "-o", plain], capture_output=True, text=True)
             genv = dict(env, DYLD_INSERT_LIBRARIES=GMALLOC, MALLOC_PROTECT_BEFORE="1")
             g = subprocess.run([plain], capture_output=True, text=True, env=genv, timeout=300) if not b.returncode else b
             if g.returncode:

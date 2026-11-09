@@ -1416,7 +1416,7 @@ void host_import(Cpu *c, uint32_t slot) {
     gil_maybe_yield(c);
     GilRec *gr = diag_on ? gil_rec_self() : NULL;   // BOOT_DIAG: the import this thread is in, for gilwait.log
     if (gr) { gr->ra = ret_addr; gr->imp_t0 = host_ticks(); gr->imp = name; }
-    int ok = !strncmp(name, "d3dx9", 5) ? d3dx(c, fn) || d3dx_effect(c, fn)
+    int ok = !strncmp(name, "d3dx9", 5) ? d3dx(c, fn) || d3dx_effect(c, fn) || d3dx_tex(c, fn)
            : !strncmp(name, "d3d9", 4) ? win32_d3d9(c, fn)
            : !strncmp(name, "DSOUND", 6) ? win32_dsound(c, fn)
            : !strncmp(name, "DINPUT8", 7) ? win32_dinput(c, fn)

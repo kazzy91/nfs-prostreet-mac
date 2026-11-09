@@ -37,16 +37,35 @@ routed to `win32_ws2`.
 
 ## Coverage
 
-`recomp/import_coverage.py` on the disc exe's import list: **452 of 542** handled (229 before the CRT shim and these
-additions). MW's own list is unchanged (287 of 300). The 90 left:
+`recomp/import_coverage.py` on the disc exe's import list: **456 of 542** handled (229 before the CRT shim and these
+additions). MW's own list is unchanged (287 of 300). The 86 left:
 
 | Group | Imports | Why they wait |
 |---|---|---|
 | Probably SecuROM's own | KERNEL32 pipes, console, `DeviceIoControl`, `QueryDosDeviceA`, `GetVolumeInformationA`, `OpenProcess`, `FlushInstructionCache`, `GetExitCodeProcess`; ADVAPI32 services, SIDs/tokens, event log | expected to vanish with an exe without SecuROM |
 | Exceptions | `RaiseException`, `RtlUnwind`, `UnhandledExceptionFilter`; MSVCR80 C++/SEH (13); MSVCP80 `std::string` (3) | need real call sites |
 | Window state | 30 USER32 calls | need `user32.m`'s window model and real call sites |
-| d3dx textures | `D3DXCreateCubeTextureFromFileInMemory`, `D3DXCreateVolumeTextureFromFileInMemory`, `D3DXSaveSurfaceToFileA`/`InMemory` | need DDS parsing and `d3d9.m`'s texture objects |
 | SHELL32 | `ShellExecuteA`, `ShellExecuteExA` | opening web pages; a stub that fails is enough |
+
+## d3dx texture files (`runtime/d3dx_tex.c`)
+
+The four d3dx9_34 texture-file functions, reached through the d3dx routing arm after `d3dx.c` and `d3dx_effect.c`.
+They use textures and surfaces only through their D3D9 COM vtables (`CreateCubeTexture`, `LockRect`, `LockBox`,
+`GetDesc`, ...), called with `call_guest` as the game's own code would. So they don't depend on `d3d9.m`'s internals,
+and MW's hooks on those methods (the env-cube sizing in `CreateCubeTexture`) apply to them like any other call.
+- `D3DXCreateCubeTextureFromFileInMemory` / `D3DXCreateVolumeTextureFromFileInMemory`: DDS files (no DX10 header) in
+  DXT1-5, the common 32/24/16-bit RGB layouts, L8, A8L8, L16, A8, and numeric-fourCC float formats. The texture is
+  created with the file's size, levels and format in `D3DPOOL_MANAGED`, then filled level by level, face by face or
+  slice by slice, honouring the locked pitch. Files that don't parse, cubes missing faces, and short or unsupported
+  files give `D3DXERR_INVALIDDATA`; the device's own errors are passed on. Formats are not converted.
+- `D3DXSaveSurfaceToFileA` / `D3DXSaveSurfaceToFileInMemory`: BMP and DIB (24-bit, or 32-bit with alpha), TGA, PPM
+  and DDS written natively; PNG and JPEG through ImageIO (the exe's `nfsProStreet%03d.jpg` suggests the game saves
+  JPEG screenshots this way); HDR and PFM are refused. An optional rectangle crops. The in-memory version returns an
+  `ID3DXBuffer` (QueryInterface, AddRef, Release, GetBufferPointer, GetBufferSize) on the resource heap. Screenshots
+  also need the frame in the surface's memory: MW's `GetRenderTargetData` is still a no-op, which is Phase 6 work.
+
+`runtime/d3dx_tex_test.c` (253 checks) runs against a fake `IDirect3DDevice9` whose locked pitches are wider than the
+rows, and decodes the PNG back through ImageIO.
 
 ## Registry (`runtime/registry.c`)
 
