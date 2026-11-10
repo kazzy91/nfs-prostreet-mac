@@ -51,6 +51,22 @@ py=$TOOLS_PY
 X360=$NFS_PARENT/x360/files
 LIMIT=${OFFLINE_TEST_LIMIT:-420}      # seconds per test
 CF="-std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined"
+# AddressSanitizer can hang in its own start-up (seen: Apple clang 17.0.0 on macOS 26.5.1, even for an empty program).
+# Probed once per run (the --one children inherit OFFLINE_ASAN): when it hangs, tools/asan_off goes first on PATH, so
+# every test's clang/clang++ builds without "address" in -fsanitize; UBSan stays. OFFLINE_ASAN=on|off skips the probe.
+if [ -z "${OFFLINE_ASAN:-}" ]; then
+    OFFLINE_ASAN=off
+    pd=$(mktemp -d)
+    printf 'int main(void) { return 0; }\n' >"$pd/p.c"
+    # in a subshell with stderr discarded: the shell itself reports a probe killed by the alarm ("Alarm clock")
+    if ( clang -fsanitize=address "$pd/p.c" -o "$pd/p" && perl -e 'alarm 15; exec @ARGV' "$pd/p" ) >/dev/null 2>&1; then OFFLINE_ASAN=on; fi
+    rm -rf "$pd"
+    export OFFLINE_ASAN
+    [ "$OFFLINE_ASAN" = on ] || echo "note: AddressSanitizer can't start with this toolchain; tests build with UBSan only (tools/asan_off)"
+fi
+if [ "$OFFLINE_ASAN" = off ]; then
+    case ":$PATH:" in *":$here/tools/asan_off:"*) ;; *) PATH="$here/tools/asan_off:$PATH"; export PATH ;; esac
+fi
 FF=$here/third_party/ffmpeg
 
 # Named release-critical tests: strict mode rejects their missing inputs/devices.

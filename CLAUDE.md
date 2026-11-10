@@ -48,6 +48,11 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
   gained the 8 missing calls; `runtime/d3dx_tex.c` loads DDS cube/volume textures and saves surfaces (BMP/TGA/PPM/DDS,
   PNG/JPEG via ImageIO); `GetRenderTargetData` now reads frames back (`readback.c`). What's left needs an exe without SecuROM: real call sites for C++ exceptions/SEH, `std::string`
   and window-state USER32, and confirming which imports were SecuROM's.
+- Offline tests: `runtime/offline_tests.sh` probes AddressSanitizer once per run; where it hangs at start-up (Apple
+  clang 17.0.0 on macOS 26.5.1, confirmed outside Claude Code's sandbox too) every test's clang/clang++ goes through
+  `tools/asan_off/`, which drops only `address` from `-fsanitize` (UBSan stays; `runtime/asan_off_test.py`). The
+  ProStreet tests in `runtime/` and `recomp/` pass here; MW-only tests that need MW's generated inputs (`gen/*.inc`,
+  `funcs.h` from `speed.exe`) fail in this checkout, as expected until Phase 4 takes them out of the ProStreet build.
 - `.gitignore` blocks game executables/DLLs/disc images, game data formats, a game folder dropped into the checkout,
   build output (`recomp/out/`, `**/build/`, `*.o`, `*.a`, app bundles), dumps and `USERDATA/`. It's a safety net:
   still check `git status`. Add new derived-output paths to it as they appear.

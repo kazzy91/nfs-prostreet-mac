@@ -1,0 +1,25 @@
+#!/bin/sh
+# tools/asan_off/clang (clang++ is a link to it). runtime/offline_tests.sh puts this folder first on PATH when
+# AddressSanitizer can't start with the installed toolchain (seen: Apple clang 17.0.0 on macOS 26.5.1 hangs in ASan's own
+# start-up, even for an empty program). It runs the real compiler of the same name with "address" taken out of every
+# -fsanitize= list, so UBSan and any other sanitizer stay; all other arguments pass through unchanged.
+case $0 in */*) self_dir=$(cd "${0%/*}" && pwd) ;; *) self_dir=$(pwd) ;; esac   # builtins only: works on any PATH
+name=${0##*/}
+rest=
+old_ifs=$IFS
+IFS=:
+for p in $PATH; do
+    [ "$p" = "$self_dir" ] || rest=${rest:+$rest:}$p
+done
+IFS=$old_ifs
+real=$(PATH=$rest command -v "$name") || { echo "$name: no $name on PATH outside $self_dir" >&2; exit 127; }
+for a do
+    shift
+    case $a in
+        -fsanitize=*)
+            v=$(printf '%s\n' "${a#-fsanitize=}" | tr ',' '\n' | grep -vx address | paste -sd, -)
+            [ -z "$v" ] || set -- "$@" "-fsanitize=$v" ;;
+        *) set -- "$@" "$a" ;;
+    esac
+done
+exec "$real" "$@"
