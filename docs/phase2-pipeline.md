@@ -56,10 +56,49 @@ are identical, and from about 0x5A10 the code sits 0x70 bytes earlier. Aligned t
 The scratch driver used for the translation (a copy of `server_module.ServerPE`'s loading without MW's pins: hash,
 entry point, relocation counts) was not committed. Giving the recompiler per-game profiles is Phase 3.
 
+## Instruction census (`recomp/census.py`)
+
+```bash
+tools/.venv/bin/python -I recomp/census.py <nfs.exe> <manifest.tsv> --json census.json --md census.md
+```
+
+Every function in the manifest goes through the real translator (`recomp.Recompiler`, calls on, as `build_all.py`
+uses it) on a `recomp/pe_image.py` image, the generic stand-in for `recomp.PE`, which is pinned to MW's `speed.exe`.
+So the verdicts are the translator's own:
+- **stubs:** functions it can't translate at all, by reason.
+- **traps:** single instructions replaced by a run-time trap, by reason (`sse2 movapd`, `haddps`, ...). That is
+  Phase 3's to-do list.
+
+Every instruction the translation reaches is counted once, by class: x87, MMX, SSE1, SSE2, SSE3 and later, and string
+ops. x87 is recognised by mnemonic: capstone's FPU group misses `fstp st(0)`, `fnstsw ax` and `fnstcw`, which MSVC
+float code uses all the time. On `server.dll` the group alone counted 97 x87 instructions; the real number is 106.
+`--jobs 1` runs in-process; otherwise worker processes share the work, with identical results.
+
+`server.dll` (ProStreet's, 1,345-function manifest from above):
+
+| | |
+|---|---|
+| Functions | 1,345 (1,345 translate, 0 stubs) |
+| Instructions | 102,233, 98 distinct mnemonics |
+| x87 FPU | 106 (0.1 %) |
+| MMX | 0 (0.0 %) |
+| SSE (float) | 0 (0.0 %) |
+| SSE2 | 0 (0.0 %) |
+| SSE3 and later | 0 (0.0 %) |
+| String ops | 319 (0.3 %) |
+| Traps (instructions the translator can't do) | 0 |
+| Imports | 129 functions in 3 DLLs (KERNEL32 93, WS2_32 35, NETAPI32 1) |
+
+So the LAN server needs nothing the translator lacks. The numbers that matter come from `nfs.exe`: MW's `speed.exe`
+had 85,875 x87, 10,391 MMX/SSE2-integer and 231 SSE float instructions, and VS2005 code may use more SSE.
+
+Test: `recomp/census_test.py` builds a PE with one function per class (x87, MMX, SSE1, SSE2, SSE3, string ops, an
+import call, an undecodable function). It checks exact class counts and the translator's verdicts (SSE2 trapped;
+x87/MMX/string not), `pe_image`'s mapping, and a mutant run with a broken classifier.
+
 ## For `nfs.exe`
 
 The same command, once an `nfs.exe` passes Phase 0. Things to check then:
 - `nfs.exe` has no relocations, so data pointers are found by scanning (as here), not from a relocation table.
 - Jump tables are handled by the translator itself (`jmp [table + reg*4]` becomes a `switch`), not by the manifest.
-- An instruction census (Phase 2's second item) still needs writing: function and instruction counts, x87/MMX/SSE/SSE2
-  use, untranslatable instructions.
+- Run the census on the manifest: its trap list is what Phase 3 has to add to the translator.

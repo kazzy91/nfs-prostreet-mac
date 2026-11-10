@@ -10,6 +10,8 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 | `build_all.py` | Translates all of `speed.exe` and compiles it → `out/speed.a` |
 | `pe_report.py` | PE facts (sections, entropy, entry point, imports, exports, version) and the Phase 0 gate: exit 0 plain, 2 protected/packed, 1 not a PE. Stdlib only. Test: `pe_report_test.py` |
 | `ghidra_functions.py` | Phase 2: a function manifest from Ghidra headless analysis (`ghidra/ExportFunctions.java`), plus `--data-refs` (pointer-reached starts and their call closure). See `docs/phase2-pipeline.md`. Test: `ghidra_functions_test.py` |
+| `census.py` | Phase 2 instruction census: per-class counts (x87, MMX, SSE1/2/3+, string ops) of everything a manifest's functions reach, with the translator's own stubs and traps. Test: `census_test.py` |
+| `pe_image.py` | Any 32-bit PE as the recompiler reads it (`read`, `imports`), optionally moved with its base relocations; `recomp.PE` stays pinned to `speed.exe` |
 | `import_coverage.py` | An exe's imports vs the host layer, per DLL; routing read from `host_import` in `runtime/boot.c`, exact names only. `--mw` checks it on MW's own list. Test: `import_coverage_test.py` |
 
 ## How it translates

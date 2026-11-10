@@ -85,8 +85,9 @@ the Phase 0 exe.
   data-referenced starts and their call closure: `recomp/ghidra_functions.py --data-refs` (Ghidra 12.2 via Homebrew,
   JDK 25). Proven end to end on ProStreet's `server.dll`: 1,345 functions, all translated and compiled
   (`docs/phase2-pipeline.md`). Jump tables are the translator's job.
-- Instruction census like ARCHITECTURE.md's table: functions, instructions, x87/MMX/SSE/SSE2 counts. VS2005 code may
-  use more SSE than MW, and `recomp.py` traps SSE2.
+- Instruction census: `recomp/census.py <nfs.exe> <manifest>` (functions, instructions by class, the translator's
+  stubs and traps). VS2005 code may use more SSE than MW, and `recomp.py` traps SSE2. `server.dll`: 102,233
+  instructions, 106 x87, no SIMD, 0 traps.
 - Identify `main`/WinMain, the game loop, `Direct3DCreate9`/`CreateDevice` call sites, the movie player, the Snd/audio
   engine entry points.
 - **Exit:** committed manifest; census in `docs/`; untranslatable-instruction list.
