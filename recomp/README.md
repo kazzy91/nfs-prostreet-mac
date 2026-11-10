@@ -6,7 +6,8 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 |---|---|
 | `recomp.py` | Translator: one C function per guest function (`void f_XXXXXXXX(Cpu *c)`) |
 | `runtime.h` | `Cpu` struct, guest memory macros (`M32(a)` = `G + a`), flag helpers, x87 emulation |
-| `difftest.py` | Differential tests against the original code under Unicorn |
+| `difftest.py` | Differential tests against the original code under Unicorn. `--synth` also runs without MW's `speed.exe` and developer emulator (a stand-in image and `synth_emu.py`); `difftest_synth_test.py` checks its verdict |
+| `synth_emu.py` | Public stand-in for the developer emulator, enough for `difftest.py --synth`: Unicorn with the stack and return trap mapped |
 | `build_all.py` | Translates all of `speed.exe` and compiles it → `out/speed.a` |
 | `pe_report.py` | PE facts (sections, entropy, entry point, imports, exports, version) and the Phase 0 gate: exit 0 plain, 2 protected/packed, 1 not a PE. Stdlib only. Test: `pe_report_test.py` |
 | `ghidra_functions.py` | Phase 2: a function manifest from Ghidra headless analysis (`ghidra/ExportFunctions.java`), plus `--data-refs` (pointer-reached starts and their call closure). See `docs/phase2-pipeline.md`. Test: `ghidra_functions_test.py` |
@@ -38,6 +39,7 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 | leaf, 3,000 sampled × 8 (`difftest_final_leaf.log`, 2026-10-19 translator) | 2,628 | **2,627** | 1 |
 | non-leaf, callees compiled in (closure ≤ 40) × 8 (`difftest_final_calls.log`) | 238 | **237** | 1 |
 | synthetic per-instruction cases × 48 (`--synth`, `difftest_synth.log`) | 336 | **336** | 0 |
+| synthetic and audit cases, standalone (no `speed.exe`, `synth_emu.py`; 2026-11-10, ProStreet fork) | 375 | **374** | 0 (1 documented expected-fail) |
 
 `--synth` assembles short snippets with clang (every MMX helper, rcl/rcr, 8/16/32-bit mul/imul/div/idiv, bt/bts/btr/btc on registers and memory bit strings, string ops in both directions, loop*/jecxz, xlatb, pushfd/popfd including the ID-bit CPUID probe, the AC bit and DF round trips, lahf/sahf) and compares them under Unicorn with the flags each one defines. It found: `bt mem, reg` ignoring the bit-string offset (the CRT's `_strpbrk`/`_strcspn` got every character ≥ 32 wrong), unsigned 16-bit offsets in `bts/btr/btc word ptr`, DF lost by `pushfd`/`popfd` and ignored by `repe cmps`.
 

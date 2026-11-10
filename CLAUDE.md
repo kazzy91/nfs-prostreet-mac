@@ -98,7 +98,9 @@ the Phase 0 exe.
   The ProStreet profile starts empty.
 - Translate all functions; compile with clang `-O2` (0 errors). Fill instruction gaps found by the census (SSE/SSE2
   as needed).
-- Difftests (`difftest.py`, `--synth`) on sampled leaves.
+- Difftests (`difftest.py`, `--synth`) on sampled leaves. `--synth` already runs here without MW's exe
+  (`recomp/difftest_synth_test.py`: 374/375 pass, 1 documented expected-fail); add a synthetic case for every
+  instruction the census says Phase 3 adds (e.g. SSE2).
 - **Exit:** `out/nfs.a` builds; ≥99 % functions translated; stubs listed; difftests pass on sampled leaves.
 
 ### Phase 4: link

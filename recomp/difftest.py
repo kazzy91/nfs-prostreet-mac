@@ -12,7 +12,8 @@
 
     tools/.venv/bin/python port/recomp/difftest.py --synth [--tests K] [--only-synth SUBSTR]
 
-Synthetic cases instead of the game's functions: short snippets (SYNTH_CASES) for the instructions added late
+Synthetic cases instead of the game's functions (also without MW's speed.exe and developer emulator: SynthPE then
+uses a stand-in image and recomp/synth_emu.py replaces tools/scripts/speed_emu.py): short snippets (SYNTH_CASES) for the instructions added late
 (MMX helpers, rcl/rcr, 8/16-bit mul/div, bt/bts/btr/btc, string ops in both directions, loop*, xlatb, pushfd/popfd),
 assembled with clang's integrated assembler into a code area at SYNTH_BASE. Each snippet builds its pointers into
 scratch from the random registers, runs the instruction under test, and stores the flags it defines (pushfd, masked)
@@ -223,14 +224,25 @@ def synth_assemble(cases, workdir):
 
 
 class SynthPE(recomp.PE):
-    """The game's PE plus the synthetic code area."""
+    """The game's PE plus the synthetic code area. Without MW's speed.exe (a ProStreet checkout), a stand-in image:
+    one zeroed .data page at 0x401000, which is all the synthetic cases' comparison reads from the image."""
     def __init__(self, code):
-        super().__init__()
+        self.standalone = False
+        try:
+            super().__init__()
+        except (OSError, SystemExit):
+            self.standalone = True
+            self.base, self.imports = 0x400000, {}
+            self.data = bytes(0x1000)
+            self.sections = [(b".data\0\0\0", 0x1000, 0x1000, 0x1000, 0)]
         self.synth = code
 
     def read(self, addr, n):
         if SYNTH_BASE <= addr < SYNTH_BASE + len(self.synth):
             return self.synth[addr - SYNTH_BASE:addr - SYNTH_BASE + n]
+        if self.standalone:
+            off = addr - self.base - 0x1000
+            return self.data[off:off + n] if 0 <= off and off + n <= len(self.data) else None
         return super().read(addr, n)
 
 
@@ -589,8 +601,11 @@ def main():
     try:
         import speed_emu
     except ImportError:    # the x86 emulator is developer tooling, not part of a public checkout
-        print("SKIP: differential test needs the developer emulator tools/scripts/speed_emu.py (not in a public checkout)")
-        return 3
+        if not args.synth:
+            print("SKIP: differential test needs the developer emulator tools/scripts/speed_emu.py (not in a public checkout)")
+            return 3
+        import synth_emu as speed_emu   # --synth needs only a mapped stack and return trap (recomp/synth_emu.py)
+        print("note: tools/scripts/speed_emu.py absent; --synth runs on recomp/synth_emu.py")
     from unicorn import UcError
     from unicorn.x86_const import UC_X86_REG_EIP, UC_X86_REG_FP0, UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG
     from unicorn import UC_ERR_EXCEPTION, UC_HOOK_INTR
