@@ -81,9 +81,10 @@ PE inspection, import coverage, generic vs MW classification, this file. See `do
 the Phase 0 exe.
 
 ### Phase 2: function boundaries
-- Ghidra headless auto-analysis (or equivalent) of `nfs.exe` → a `functions_ps.tsv` manifest in the
-  `functions_v13.tsv` format. Add data-referenced starts (vtables, callbacks, static initializers:
-  `build_all.add_data_referenced`) and jump tables.
+- Ghidra headless auto-analysis of `nfs.exe` → a `functions_ps.tsv` manifest in the `functions_v13.tsv` format, with
+  data-referenced starts and their call closure: `recomp/ghidra_functions.py --data-refs` (Ghidra 12.2 via Homebrew,
+  JDK 25). Proven end to end on ProStreet's `server.dll`: 1,345 functions, all translated and compiled
+  (`docs/phase2-pipeline.md`). Jump tables are the translator's job.
 - Instruction census like ARCHITECTURE.md's table: functions, instructions, x87/MMX/SSE/SSE2 counts. VS2005 code may
   use more SSE than MW, and `recomp.py` traps SSE2.
 - Identify `main`/WinMain, the game loop, `Direct3DCreate9`/`CreateDevice` call sites, the movie player, the Snd/audio
