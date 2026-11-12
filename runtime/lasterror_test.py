@@ -80,6 +80,12 @@ size_t x360music_read(X360MusicHandle *h, void *dst, size_t n) {
 '''
 
 POST = r'''
+// host_import also routes to the CRT shim, the registry and the Win32 additions (ProStreet); none of the calls this
+// fixture makes reach them, so they report "not handled".
+int win32_msvcr(Cpu *c, const char *fn) { (void)c; (void)fn; return 0; }
+int win32_registry(Cpu *c, const char *fn) { (void)c; (void)fn; return 0; }
+int win32_more(Cpu *c, const char *fn) { (void)c; (void)fn; return 0; }
+int win32_more_close(uint32_t h) { (void)h; return 0; }
 static unsigned checks, failures, handovers, io_cases;
 #define CHECK(x) do { ++checks; if (!(x)) { ++failures; if (failures<9) fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x); } } while (0)
 static uint32_t api(Cpu *c, unsigned slot, unsigned n, const uint32_t *a) {

@@ -10,6 +10,9 @@
 #include <string.h>
 #endif
 
+// An SSE register (xmm0-7): 4 floats, viewed as integer lanes for moves, logic and SSE2 (SSE translation in recomp.py).
+typedef union Xmm { float f[4]; uint32_t u[4]; int32_t i[4]; uint64_t q[2]; double d[2]; uint16_t w[8]; uint8_t b[16]; } Xmm;
+
 typedef struct Cpu {
     uint32_t eax, ecx, edx, ebx, esp, ebp, esi, edi;
     uint32_t fs_base;
@@ -24,6 +27,7 @@ typedef struct Cpu {
     uint32_t eflags_ext; // EFLAGS bits kept only for pushfd/popfd: AC (0x40000) and ID (0x200000), which the game
                          // toggles to detect CPUID before it measures the CPU clock
     uint32_t eflags;  // arithmetic flags handed to the next function at fall-through / tail jumps (audit 3 #1)
+    Xmm xmm[8];       // SSE registers (last, so the fields above keep their offsets)
 } Cpu;
 
 extern uint8_t *G;    // guest memory base
@@ -292,4 +296,63 @@ static inline uint64_t mmx_psrld(uint64_t x, uint64_t k) { if (k > 31) return 0;
 static inline uint64_t mmx_psrad(uint64_t x, uint64_t k) { if (k > 31) k = 31; v2i32 a; memcpy(&a, &x, 8); a = a >> (int32_t)k; memcpy(&x, &a, 8); return x; }
 static inline uint64_t mmx_psllq(uint64_t x, uint64_t k) { return k > 63 ? 0 : x << k; }
 static inline uint64_t mmx_psrlq(uint64_t x, uint64_t k) { return k > 63 ? 0 : x >> k; }
+// ---- SSE (single precision; scalar ops use lane 0) ----
+// Every operation is one IEEE single-precision step, like the hardware. Results differ from ARM's only for NaNs:
+// x86 returns a NaN operand quieted (the first source wins; Unicorn/QEMU picks the larger significand when both are
+// NaN, a case random tests essentially never meet) and makes the negative default NaN 0xFFC00000 for an invalid
+// operation, where ARM makes 0x7FC00000. The fix-up runs only when the result is a NaN.
+#define XLD(a) xmm_ld(G + (uint32_t)(a))
+#define XST(a, v) xmm_st(G + (uint32_t)(a), (v))
+static inline Xmm xmm_ld(const uint8_t *p) { Xmm v; memcpy(&v, p, 16); return v; }
+static inline void xmm_st(uint8_t *p, Xmm v) { memcpy(p, &v, 16); }
+static inline uint32_t sse_bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+static inline float sse_float(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
+static inline float sse_nan(float a, float b) {
+    if (a != a) return sse_float(sse_bits(a) | 0x00400000u);
+    if (b != b) return sse_float(sse_bits(b) | 0x00400000u);
+    return sse_float(0xFFC00000u);
+}
+static inline float sse_add(float a, float b) { float r = a + b; return __builtin_expect(r != r, 0) ? sse_nan(a, b) : r; }
+static inline float sse_sub(float a, float b) { float r = a - b; return __builtin_expect(r != r, 0) ? sse_nan(a, b) : r; }
+static inline float sse_mul(float a, float b) { float r = a * b; return __builtin_expect(r != r, 0) ? sse_nan(a, b) : r; }
+static inline float sse_div(float a, float b) { float r = a / b; return __builtin_expect(r != r, 0) ? sse_nan(a, b) : r; }
+static inline float sse_sqrt(float a) { float r = __builtin_sqrtf(a); return __builtin_expect(r != r, 0) ? sse_nan(a, a) : r; }
+// rcp/rsqrt: hardware gives a 12-bit approximation that differs between CPU makers; the reference (QEMU) and this
+// port compute 1/x and 1/sqrt(x) in full single precision (two roundings for rsqrt, as QEMU does).
+static inline float sse_rcp(float a) { return sse_div(1.0f, a); }
+static inline float sse_rsqrt(float a) { float s = sse_sqrt(a); return s != s ? s : 1.0f / s; }
+// min/max return the second operand when either is a NaN or both are zeros of any sign (exactly the x86 rule)
+static inline float sse_min(float a, float b) { return a < b ? a : b; }
+static inline float sse_max(float a, float b) { return a > b ? a : b; }
+// cmpps/cmpss predicates 0-7: eq lt le unord neq nlt nle ord; all ones when true
+static inline uint32_t sse_cmp(float a, float b, int p) {
+    int un = a != a || b != b, t;
+    switch (p & 7) {
+    case 0: t = a == b; break;
+    case 1: t = a < b; break;
+    case 2: t = a <= b; break;
+    case 3: t = un; break;
+    case 4: t = !(a == b); break;
+    case 5: t = !(a < b); break;
+    case 6: t = !(a <= b); break;
+    default: t = !un; break;
+    }
+    return t ? 0xFFFFFFFFu : 0;
+}
+// float -> int32: NaN and out of range give the "integer indefinite" 0x80000000. cvt rounds as MXCSR.RC says
+// (0 nearest-even, 1 down, 2 up, 3 toward zero; c->mxcsr 0 means the reset value 0x1F80), cvtt truncates.
+static inline int32_t sse_cvtt(float f) {
+    return (f != f || f >= 2147483648.0f || f < -2147483648.0f) ? INT32_MIN : (int32_t)f;
+}
+static inline int32_t sse_cvt(float f, uint32_t mxcsr) {
+    switch ((mxcsr >> 13) & 3) {
+    case 1: f = __builtin_floorf(f); break;
+    case 2: f = __builtin_ceilf(f); break;
+    case 3: f = __builtin_truncf(f); break;
+    default: f = __builtin_roundevenf(f); break;
+    }
+    return sse_cvtt(f);
+}
+static inline uint32_t sse_movmsk(Xmm x) { return (x.u[0] >> 31) | (x.u[1] >> 31) << 1 | (x.u[2] >> 31) << 2 | (x.u[3] >> 31) << 3; }
+
 static inline uint32_t mmx_pmovmskb(uint64_t x) { uint32_t m = 0; for (int i = 0; i < 8; ++i) m |= (uint32_t)(x >> (8 * i + 7) & 1) << i; return m; }

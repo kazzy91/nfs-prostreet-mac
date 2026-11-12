@@ -44,12 +44,16 @@ STACK_LO = STACK_HI - 0x100000
 REGS = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"]
 
 
+class XmmUnion(ctypes.Union):
+    _fields_ = [("f", ctypes.c_float * 4), ("u", ctypes.c_uint32 * 4), ("q", ctypes.c_uint64 * 2)]
+
+
 class CpuStruct(ctypes.Structure):
     _fields_ = [(r, ctypes.c_uint32) for r in REGS] + [
         ("fs_base", ctypes.c_uint32), ("st", ctypes.c_double * 8), ("top", ctypes.c_uint32),
         ("sw", ctypes.c_uint16), ("cw", ctypes.c_uint16), ("mm", ctypes.c_uint64 * 8),
         ("df", ctypes.c_uint32), ("mxcsr", ctypes.c_uint32), ("abi_skip", ctypes.c_uint32),
-        ("eflags_ext", ctypes.c_uint32), ("eflags", ctypes.c_uint32)]
+        ("eflags_ext", ctypes.c_uint32), ("eflags", ctypes.c_uint32), ("xmm", XmmUnion * 8)]
 
 
 def fp80(mant, exp):
@@ -188,6 +192,60 @@ def synth_cases():
         ("pinsrw", f"{mm_in}\npinsrw mm0, eax, 1\npinsrw mm1, word ptr [esi+24], 3\n{mm_out}", 0),
         ("pmovmskb", f"{mm_in}\npmovmskb eax, mm0\npmovmskb ecx, mm1\n{mm_out}", 0),
     ]
+    # SSE (single precision): xmm0-2 loaded from random scratch (every float class: NaNs, infinities, denormals,
+    # zeros), the instruction, then all three stored back, so every lane is compared. "small" inputs get exponents
+    # 2^1..2^32 so conversions see in-range values; ss memory sources are dword, ps xmmword.
+    x_in = f"{ptr('esi')}\n{ptr('edi')}\nmovups xmm0, xmmword ptr [esi]\nmovups xmm1, xmmword ptr [esi+16]\nmovups xmm2, xmmword ptr [esi+32]"
+    x_out = "movups xmmword ptr [edi], xmm0\nmovups xmmword ptr [edi+16], xmm1\nmovups xmmword ptr [edi+32], xmm2"
+    small = ("push ecx\nmov ecx, 16\n1: and dword ptr [esi+ecx*4-4], 0x8fffffff\nor dword ptr [esi+ecx*4-4], 0x40000000\n"
+             "loop 1b\npop ecx")
+    x_small = f"{ptr('esi')}\n{small}\n{x_in}"
+    for base in list(recomp.SSE_ARITH) + list(recomp.SSE_UNARY) + [f"cmp{p}" for p in recomp.SSE_CMP]:
+        for kind, mem in (("ss", "dword"), ("ps", "xmmword")):
+            op = base + kind
+            cases += [
+                (f"{op} xmm, xmm", f"{x_in}\n{op} xmm0, xmm1\n{op} xmm2, xmm2\n{x_out}", 0),
+                (f"{op} xmm, m", f"{x_in}\n{op} xmm1, {mem} ptr [esi+48]\n{x_out}", 0),
+                (f"{op} small", f"{x_small}\n{op} xmm0, xmm1\n{x_out}", 0),
+            ]
+    for op in sorted(recomp.SSE_LOGIC):
+        cases += [(f"{op} xmm, xmm", f"{x_in}\n{op} xmm0, xmm1\n{op} xmm2, xmm2\n{x_out}", 0),
+                  (f"{op} xmm, m128", f"{x_in}\n{op} xmm1, xmmword ptr [esi+48]\n{x_out}", 0)]
+    for op in ("comiss", "ucomiss"):
+        cases += [(f"{op} xmm, xmm", f"{x_in}\n{op} xmm0, xmm1", ARITH),
+                  (f"{op} xmm, m32", f"{x_in}\n{op} xmm1, dword ptr [esi+48]", ARITH),
+                  (f"{op} equal", f"{x_in}\n{op} xmm2, xmm2", ARITH),
+                  (f"{op} small", f"{x_small}\n{op} xmm0, xmm1", ARITH)]
+    cases += [
+        ("movss load/store/move", f"{x_in}\nmovss xmm0, dword ptr [esi+48]\nmovss xmm1, xmm2\nmovss dword ptr [edi+60], xmm2\n{x_out}", 0),
+        ("movaps/movups/movntps", f"{x_in}\nmovaps xmm0, xmmword ptr [esi+48]\nmovaps xmm1, xmm2\nmovups xmm2, xmmword ptr [esi+52]\n"
+                                  f"movntps xmmword ptr [edi+48], xmm1\nmovaps xmmword ptr [edi+64], xmm0\n{x_out}", 0),
+        ("movlps/movhps", f"{x_in}\nmovlps xmm0, qword ptr [esi+48]\nmovhps xmm1, qword ptr [esi+56]\nmovlps qword ptr [edi+48], xmm2\n"
+                          f"movhps qword ptr [edi+56], xmm2\n{x_out}", 0),
+        ("movlhps/movhlps", f"{x_in}\nmovlhps xmm0, xmm1\nmovhlps xmm2, xmm1\n{x_out}", 0),
+        ("shufps", f"{x_in}\nshufps xmm0, xmm1, 0x1b\nshufps xmm1, xmmword ptr [esi+48], 0xd2\nshufps xmm2, xmm2, 0x00\n{x_out}", 0),
+        ("unpcklps/unpckhps", f"{x_in}\nunpcklps xmm0, xmm1\nunpckhps xmm1, xmm2\nunpcklps xmm2, xmmword ptr [esi+48]\n{x_out}", 0),
+        ("movmskps", f"{x_in}\nmovmskps eax, xmm0\nmovmskps ecx, xmm1", 0),
+        ("cvttss2si/cvtss2si", f"{x_in}\ncvttss2si eax, xmm0\ncvtss2si ecx, xmm1\ncvttss2si edx, dword ptr [esi+48]\ncvtss2si ebx, dword ptr [esi+52]", 0),
+        ("cvttss2si/cvtss2si small", f"{x_small}\ncvttss2si eax, xmm0\ncvtss2si ecx, xmm1\ncvttss2si edx, dword ptr [esi+48]\ncvtss2si ebx, dword ptr [esi+52]", 0),
+        ("cvtss2si rounding modes", f"{x_small}\nsub esp, 4\nmov dword ptr [esp], 0x3f80\nldmxcsr dword ptr [esp]\ncvtss2si eax, xmm0\n"
+                                    f"mov dword ptr [esp], 0x5f80\nldmxcsr dword ptr [esp]\ncvtss2si ecx, xmm1\nmov dword ptr [esp], 0x1f80\n"
+                                    f"ldmxcsr dword ptr [esp]\nadd esp, 4", 0),
+        ("cvtsi2ss", f"{x_in}\ncvtsi2ss xmm0, eax\ncvtsi2ss xmm1, dword ptr [esi+48]\ncvtsi2ss xmm2, ecx\n{x_out}", 0),
+        ("cvtpi2ps", f"{x_in}\nmovq mm1, qword ptr [esi+48]\ncvtpi2ps xmm0, mm1\ncvtpi2ps xmm1, qword ptr [esi+56]\n{x_out}\nemms", 0),
+        ("cvtps2pi/cvttps2pi", f"{x_small}\ncvtps2pi mm0, xmm0\ncvttps2pi mm1, xmm1\ncvtps2pi mm2, qword ptr [esi+48]\n"
+                               f"movq qword ptr [edi], mm0\nmovq qword ptr [edi+8], mm1\nmovq qword ptr [edi+16], mm2\nemms", 0),
+        ("cvtps2pi/cvttps2pi any", f"{x_in}\ncvtps2pi mm0, xmm0\ncvttps2pi mm1, qword ptr [esi+48]\n"
+                                   f"movq qword ptr [edi], mm0\nmovq qword ptr [edi+8], mm1\nemms", 0),
+        ("movntq", f"{ptr('esi')}\n{ptr('edi')}\nmovq mm3, qword ptr [esi]\nmovntq qword ptr [edi+8], mm3\nemms", 0),
+    ]
+    # x87 compares into EFLAGS (P6): capstone's fcompi/fucompi pop; fcomi/fucomi don't. st(1) and st(2).
+    f3 = f"{ptr('esi')}\nfld dword ptr [esi]\nfld dword ptr [esi+4]\nfld dword ptr [esi+8]"
+    for op in ("fcomi", "fucomi", "fcomip", "fucomip"):
+        for k in (1, 2):
+            pops = "\nfstp st(0)" * (2 if op.endswith("p") else 3)
+            cases.append((f"{op} st(0), st({k})", f"{f3}\n{op} st(0), st({k}){pops}", ARITH))
+    cases.append(("fucomip equal", f"{ptr('esi')}\nfld dword ptr [esi]\nfld st(0)\nfucomip st(0), st(1)\nfstp st(0)", ARITH))
     # int3 continues like under a debugger (recomp.py int3; the reference hooks it the same way): the bFree 00465760
     # continuation (pops, ADD ESP,20h), __break's int3; ret, a prefixed two-byte int3 and an int3 that is a jump target
     cases += [

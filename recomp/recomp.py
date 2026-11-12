@@ -76,6 +76,17 @@ MMX_OPS = {"paddb", "paddw", "paddd", "paddsb", "paddsw", "paddusb", "paddusw", 
            "punpcklbw", "punpckhbw", "punpcklwd", "punpckhwd", "punpckldq", "punpckhdq", "pand", "por", "pxor", "pandn",
            "packsswb", "packuswb", "packssdw", "psllw", "psrlw", "psraw", "pslld", "psrld", "psrad", "psllq", "psrlq"}
 
+# SSE (single-precision float, Pentium III) on the xmm registers in Cpu: helpers in runtime.h.
+SSE_ARITH = {"add": "sse_add", "sub": "sse_sub", "mul": "sse_mul", "div": "sse_div", "min": "sse_min", "max": "sse_max"}
+SSE_UNARY = {"sqrt": "sse_sqrt", "rcp": "sse_rcp", "rsqrt": "sse_rsqrt"}
+SSE_LOGIC = {"andps": "d.u[k] & s.u[k]", "andnps": "~d.u[k] & s.u[k]", "orps": "d.u[k] | s.u[k]", "xorps": "d.u[k] ^ s.u[k]"}
+SSE_CMP = {"eq": 0, "lt": 1, "le": 2, "unord": 3, "neq": 4, "nlt": 5, "nle": 6, "ord": 7}   # capstone's pseudo-ops
+SSE_OPS = ({k + s for k in list(SSE_ARITH) + list(SSE_UNARY) for s in ("ss", "ps")} | set(SSE_LOGIC) |
+           {f"cmp{p}{s}" for p in SSE_CMP for s in ("ss", "ps")} |
+           {"movss", "movaps", "movups", "movntps", "movlps", "movhps", "movlhps", "movhlps", "comiss", "ucomiss", "shufps",
+            "unpcklps", "unpckhps", "cvttss2si", "cvtss2si", "cvtsi2ss", "cvtpi2ps", "cvtps2pi", "cvttps2pi", "movmskps",
+            "movntq"})
+
 
 # Flags for compiling translated code (build_all.py, difftest.py). Translated functions take `Cpu *restrict c`, so
 # guest stores can't clobber registers kept in host registers, but LLVM only proves that while `c` is not captured,
@@ -785,10 +796,107 @@ class Recompiler:
         if m == "ret":
             n = ops[0].imm if ops else 0
             return [f"ABI_CHECK(0x{fstart:08X}u); c->esp += {4 + n}; return;"]
+        if m in SSE_OPS:
+            return self.sse(i, m)
         if m in MMX_OPS or m in ("movq", "movd", "emms", "pextrw", "pinsrw", "pmovmskb", "pshufw"):
             return self.mmx(i, m)
         if m.startswith("f"):
             return self.x87(i, m)
+        raise Unsupported(m)
+
+    # ---------- SSE ----------
+    def is_xmm(self, i, op):
+        return op.type == CS_OP_REG and i.reg_name(op.reg).startswith("xmm")
+
+    def xreg(self, i, op):
+        if not self.is_xmm(i, op):
+            raise Unsupported("sse operand")
+        return f"c->xmm[{i.reg_name(op.reg)[3]}]"
+
+    def x128(self, i, op):
+        """A 128-bit source: an xmm register or 16 bytes of memory (an Xmm value)."""
+        return self.xreg(i, op) if op.type == CS_OP_REG else f"XLD({self.ea(i, op)})"
+
+    def x32(self, i, op, lane=0):
+        """A single-precision source: lane of an xmm register, or the float in memory (+4 * lane)."""
+        if op.type == CS_OP_REG:
+            return f"{self.xreg(i, op)}.f[{lane}]"
+        ea = self.ea(i, op)
+        return f"MF32({ea})" if not lane else f"MF32((uint32_t)({ea}) + {4 * lane}u)"
+
+    def sse(self, i, m):
+        ops = i.operands
+        if m == "movntq":                                       # MMX store (non-temporal: an ordinary store here)
+            return [f"M64({self.ea(i, ops[0])}) = c->mm[{i.reg_name(ops[1].reg)[2]}];"]
+        if m == "movss":
+            d, s_ = ops
+            if d.type == CS_OP_MEM:
+                return [f"M32({self.ea(i, d)}) = {self.xreg(i, s_)}.u[0];"]
+            D = self.xreg(i, d)
+            if s_.type == CS_OP_MEM:                            # a load clears the upper three lanes
+                return [f"{{ uint32_t v = M32({self.ea(i, s_)}); {D}.u[0] = v; {D}.u[1] = {D}.u[2] = {D}.u[3] = 0; }}"]
+            return [f"{D}.u[0] = {self.xreg(i, s_)}.u[0];"]       # register to register: lane 0 only
+        if m in ("movaps", "movups", "movntps"):
+            d, s_ = ops
+            if d.type == CS_OP_MEM:
+                return [f"XST({self.ea(i, d)}, {self.xreg(i, s_)});"]
+            return [f"{self.xreg(i, d)} = {self.x128(i, s_)};"]
+        if m in ("movlps", "movhps"):
+            q = 0 if m == "movlps" else 1
+            d, s_ = ops
+            if d.type == CS_OP_MEM:
+                return [f"M64({self.ea(i, d)}) = {self.xreg(i, s_)}.q[{q}];"]
+            return [f"{self.xreg(i, d)}.q[{q}] = M64({self.ea(i, s_)});"]
+        if m in ("movlhps", "movhlps"):
+            d, s_ = (self.xreg(i, o) for o in ops)
+            return [f"{d}.q[1] = {s_}.q[0];" if m == "movlhps" else f"{d}.q[0] = {s_}.q[1];"]
+        if m in SSE_LOGIC:
+            D = self.xreg(i, ops[0])
+            return [f"{{ Xmm d = {D}, s = {self.x128(i, ops[1])}; for (int k = 0; k < 4; k++) {D}.u[k] = {SSE_LOGIC[m]}; }}"]
+        base, kind = m[:-2], m[-2:]
+        if base in SSE_ARITH or base in SSE_UNARY:
+            D = self.xreg(i, ops[0])
+            if kind == "ss":
+                if base in SSE_ARITH:
+                    return [f"{D}.f[0] = {SSE_ARITH[base]}({D}.f[0], {self.x32(i, ops[1])});"]
+                return [f"{D}.f[0] = {SSE_UNARY[base]}({self.x32(i, ops[1])});"]
+            if base in SSE_ARITH:
+                return [f"{{ Xmm s = {self.x128(i, ops[1])}; for (int k = 0; k < 4; k++) {D}.f[k] = {SSE_ARITH[base]}({D}.f[k], s.f[k]); }}"]
+            return [f"{{ Xmm s = {self.x128(i, ops[1])}; for (int k = 0; k < 4; k++) {D}.f[k] = {SSE_UNARY[base]}(s.f[k]); }}"]
+        if m.startswith("cmp") and base[3:] in SSE_CMP:
+            p = SSE_CMP[base[3:]]
+            D = self.xreg(i, ops[0])
+            if kind == "ss":
+                return [f"{D}.u[0] = sse_cmp({D}.f[0], {self.x32(i, ops[1])}, {p});"]
+            return [f"{{ Xmm s = {self.x128(i, ops[1])}; for (int k = 0; k < 4; k++) {D}.u[k] = sse_cmp({D}.f[k], s.f[k], {p}); }}"]
+        if m in ("comiss", "ucomiss"):
+            return [f"{{ float a = {self.x32(i, ops[0])}, b = {self.x32(i, ops[1])}; int un = a != a || b != b; "
+                    f"zf = un || a == b; pf = un; cf = un || a < b; of = sf = af = 0; }}"]
+        if m == "shufps":
+            k = ops[2].imm
+            D = self.xreg(i, ops[0])
+            return [f"{{ Xmm d = {D}, s = {self.x128(i, ops[1])}; {D}.u[0] = d.u[{k & 3}]; {D}.u[1] = d.u[{k >> 2 & 3}]; "
+                    f"{D}.u[2] = s.u[{k >> 4 & 3}]; {D}.u[3] = s.u[{k >> 6 & 3}]; }}"]
+        if m in ("unpcklps", "unpckhps"):
+            h = 0 if m == "unpcklps" else 2
+            D = self.xreg(i, ops[0])
+            return [f"{{ Xmm d = {D}, s = {self.x128(i, ops[1])}; {D}.u[0] = d.u[{h}]; {D}.u[1] = s.u[{h}]; "
+                    f"{D}.u[2] = d.u[{h + 1}]; {D}.u[3] = s.u[{h + 1}]; }}"]
+        if m in ("cvttss2si", "cvtss2si"):
+            f = f"sse_cvtt({self.x32(i, ops[1])})" if m == "cvttss2si" else f"sse_cvt({self.x32(i, ops[1])}, c->mxcsr)"
+            return [self.wr(i, ops[0], f"(uint32_t){f}")]
+        if m == "cvtsi2ss":                                     # exact or nearest-even (MXCSR.RC other than 0: not modelled)
+            return [f"{self.xreg(i, ops[0])}.f[0] = (float)(int32_t){self.rd(i, ops[1], 4)};"]
+        if m == "cvtpi2ps":
+            src = f"c->mm[{i.reg_name(ops[1].reg)[2]}]" if ops[1].type == CS_OP_REG else f"M64({self.ea(i, ops[1])})"
+            D = self.xreg(i, ops[0])
+            return [f"{{ uint64_t v = {src}; {D}.f[0] = (float)(int32_t)(uint32_t)v; {D}.f[1] = (float)(int32_t)(uint32_t)(v >> 32); }}"]
+        if m in ("cvtps2pi", "cvttps2pi"):
+            cv = (lambda x: f"sse_cvtt({x})") if m == "cvttps2pi" else (lambda x: f"sse_cvt({x}, c->mxcsr)")
+            n = i.reg_name(ops[0].reg)[2]
+            return [f"c->mm[{n}] = (uint64_t)(uint32_t){cv(self.x32(i, ops[1], 0))} | (uint64_t)(uint32_t){cv(self.x32(i, ops[1], 1))} << 32;"]
+        if m == "movmskps":
+            return [self.wr(i, ops[0], f"sse_movmsk({self.xreg(i, ops[1])})")]
         raise Unsupported(m)
 
     # ---------- MMX ----------
@@ -1030,9 +1138,9 @@ class Recompiler:
             return [f"x87_compare(c, ST(0), {src}, {int(m.startswith('fu'))});{pop}"]
         if m in ("fcompp", "fucompp"):
             return [f"x87_compare(c, ST(0), ST(1), {int(m.startswith('fu'))}); x87_pop(c); x87_pop(c);"]
-        if m in ("fcomi", "fcomip", "fucomi", "fucomip"):
-            k = self.streg(i, ops[1]) if len(ops) > 1 else 1
-            pop = " x87_pop(c);" if m.endswith("p") else ""
+        if m in ("fcomi", "fcomip", "fucomi", "fucomip", "fcompi", "fucompi"):     # capstone: fcompi st(i)
+            k = self.streg(i, ops[-1]) if ops else 1
+            pop = " x87_pop(c);" if m in ("fcomip", "fucomip", "fcompi", "fucompi") else ""
             return [f"{{ double a = ST(0), b = ST({k}); int un = isnan(a) || isnan(b); "
                     f"zf = un || a == b; pf = un; cf = un || a < b; of = sf = af = 0; }}{pop}"]
         if m == "ftst":

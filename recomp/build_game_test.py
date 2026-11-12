@@ -3,7 +3,7 @@
 
 Run: tools/.venv/bin/python -I recomp/build_game_test.py        (capstone; the compile case needs clang)
 
-The exe's code holds four functions: a leaf, a caller of it, one with an SSE instruction the translator traps, and
+The exe's code holds four functions: a leaf, a caller of it, one with an instruction the translator traps (a segment register read), and
 one whose bytes don't decode (a stub). A temporary profile pins its code fingerprint and points at a manifest and a
 hooks file naming the leaf. Checked: an exe with other code is refused before anything is written; funcs.h declares
 every function plus the hooked one's _orig; the hooked body is f_X_orig with a weak f_X; table.c lists every start and
@@ -23,14 +23,14 @@ import exe_fingerprint  # noqa: E402
 import pe_report_test  # noqa: E402
 import profiles  # noqa: E402
 
-LEAF, CALLER, SSE, BAD = 0x401000, 0x401010, 0x401020, 0x401030
+LEAF, CALLER, TRAP, BAD = 0x401000, 0x401010, 0x401020, 0x401030
 
 
 def exe(flip=False):
     t = bytearray(b"\xcc" * 0x3000)
     t[0x00:0x06] = b"\xb8\x01\x00\x00\x00\xc3"                                   # mov eax, 1; ret
     t[0x10:0x16] = b"\xe8" + struct.pack("<i", LEAF - (CALLER + 5)) + b"\xc3"    # call leaf; ret
-    t[0x20:0x27] = b"\xf3\x0f\x10\x44\x24\x04\xc3"                               # movss xmm0, [esp+4]; ret
+    t[0x20:0x23] = b"\x8c\xd0\xc3"                                               # mov eax, ss (a trap); ret
     t[0x30:0x33] = b"\x0f\x04\xc3"                                               # undecodable: a stub
     if flip:
         t[0x01] = 2
@@ -46,7 +46,7 @@ class BuildGame(unittest.TestCase):
             f.write(exe())
         man, self.hooks = os.path.join(self.tmp, "functions.tsv"), os.path.join(self.tmp, "hooks.txt")
         with open(man, "w") as f:
-            f.write("# synthetic\n00401000\tleaf\n00401010\tcaller\n00401020\tsse\n00401030\tbad\n")
+            f.write("# synthetic\n00401000\tleaf\n00401010\tcaller\n00401020\ttrap\n00401030\tbad\n")
         self.set_hooks(True)
         regions = ((".text", 0x1000, 0x3000),)
         tag = b"synth-exe-fp-v1\n"
@@ -82,9 +82,9 @@ class BuildGame(unittest.TestCase):
         self.assertEqual((r["functions"], r["translated"]), (4, 3))
         self.assertEqual(sum(r["stubs"].values()), 1)
         self.assertEqual(sum(r["traps"].values()), 1, r["traps"])
-        self.assertIn("movss", next(iter(r["traps"])))
+        self.assertEqual(list(r["traps"]), ["reg ss"])
         h = self.read("funcs.h")
-        for a in (LEAF, CALLER, SSE, BAD):
+        for a in (LEAF, CALLER, TRAP, BAD):
             self.assertIn(f"void f_{a:08X}(Cpu *c);", h)
         self.assertIn(f"void f_{LEAF:08X}_orig(Cpu *c);   /* hooked: test.c: the leaf */", h)
         c = self.read("game_00.c")

@@ -112,10 +112,12 @@ translator patches apply only to MW's fingerprinted exe (`Recompiler.mw_patches`
 ### Phase 3: recompile (in progress)
 Status (2026-11-12): game profiles in `recomp/profiles.py` (`mw13` still builds with `build_all.py`; `ps_demo` with
 the new `recomp/build_game.py`). The whole demo exe translates (35,286 of 35,288 functions, 2 undecodable stubs) and
-compiles to `recomp/out/ps_demo/nfs.a` (arm64, 0 errors, ~50 s). It still holds 51,078 run-time traps in 3,257
-functions, so the ≥99 % criterion counts functions without traps: next is SSE in the translator
-(`docs/ps-census.md` has the order). MW's build_all.py passes and translator patches move into `mw13` when MW's build
-switches to build_game.py, which needs speed.exe to check.
+compiles to `recomp/out/ps_demo/nfs.a` (arm64, 0 errors, ~55 s). SSE single precision and `fcomi`/`fucomi` are
+translated (142 synthetic difftests): traps went from 51,078 to 818, and **35,255 functions (99.91 %) are
+trap-free**. Left in 31 functions: SSE2 (19 functions: `movdqa`, packed 16-bit integer, conversions) and 12 others
+(CRT start-up/failure reporting, `bswap`, `bsr`, `lock cmpxchg8b`). Difftests on real sampled leaves still need
+difftest.py to run a profile's exe (it reads MW's speed.exe). MW's build_all.py passes and translator patches move
+into `mw13` when MW's build switches to build_game.py, which needs speed.exe to check.
 - Make the recompiler game-parameterized: a game profile with the exe path, fingerprint, function manifest, hooks
   file and inline patch tables. Move MW's inline patches out of `recomp.py`/`build_all.py` into the MW profile.
   The ProStreet profile starts empty.

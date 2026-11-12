@@ -81,3 +81,7 @@ CLAUDE.local.md
 
 # Setup disk images built from this checkout (tools/ps_setup/build_dmg.sh, tools/installer/build_installer.sh)
 dist/
+
+# Test/build by-products: tables generated from the player's files (tools/gen_tables.py) and the offline tests' Metal scratch
+runtime/gen/
+.metal-cache/

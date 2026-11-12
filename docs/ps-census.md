@@ -35,7 +35,10 @@ MW's speed.exe has almost no SSE. ProStreet, built with VS2005, uses **SSE scala
 is 36,818 sites). That is the main new translator work in Phase 3. The translator check is "would `recomp.py`
 translate it": a function with a trap still compiles, but it dies at run time if it reaches the trap.
 
-### Untranslatable instructions, grouped by what Phase 3 must add
+**Update (Phase 3, 2026-11-12):** SSE single precision and `fcomi`/`fucomi` are translated now. `build_game.py`'s
+report: 818 traps left in 31 functions (SSE2 in 19, the "other" row in 12); 35,255 functions are trap-free.
+
+### Untranslatable instructions, grouped by what Phase 3 must add (as first counted)
 
 | Family | Sites | Instructions |
 |---|---|---|
