@@ -1,0 +1,6 @@
+# Guest functions of ProStreet's nfs.exe (profile ps_demo) that the runtime replaces with host code (build_game.py).
+# Same format and mechanism as hooks.txt: the translated body becomes f_XXXXXXXX_orig and f_XXXXXXXX a weak wrapper
+# calling it; a strong f_XXXXXXXX in the runtime takes every call and can still call f_XXXXXXXX_orig.
+#
+# address   owner: function
+# (none yet: Phase 5 adds them as boot needs them)

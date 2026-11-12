@@ -9,6 +9,9 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 | `difftest.py` | Differential tests against the original code under Unicorn. `--synth` also runs without MW's `speed.exe` and developer emulator (a stand-in image and `synth_emu.py`); `difftest_synth_test.py` checks its verdict |
 | `synth_emu.py` | Public stand-in for the developer emulator, enough for `difftest.py --synth`: Unicorn with the stack and return trap mapped |
 | `build_all.py` | Translates all of `speed.exe` and compiles it → `out/speed.a` |
+| `profiles.py` | Game profiles: each exe's fingerprint profile, function manifest, hooks file, output names and builder (`mw13` → `build_all.py`, `ps_demo` → `build_game.py`) |
+| `build_game.py` | Translates a profile's exe (fingerprint-checked) and compiles it → `out/<game>/<stem>.a`, with `report.txt` (stubs and run-time traps by reason). `--generate-only` writes the C only. Test: `build_game_test.py` |
+| `hooks_ps.txt` | ProStreet's hooks file (same format as `hooks.txt`); empty until Phase 5 |
 | `pe_report.py` | PE facts (sections, entropy, entry point, imports, exports, version) and the Phase 0 gate: exit 0 plain, 2 protected/packed, 1 not a PE. Stdlib only. Test: `pe_report_test.py` |
 | `ghidra_functions.py` | Phase 2: a function manifest from Ghidra headless analysis (`ghidra/ExportFunctions.java`), plus `--data-refs` (pointer-reached starts and their call closure). See `docs/phase2-pipeline.md`. Test: `ghidra_functions_test.py` |
 | `census.py` | Phase 2 instruction census: per-class counts (x87, MMX, SSE1/2/3+, string ops) of everything a manifest's functions reach, with the translator's own stubs and traps. Test: `census_test.py` |

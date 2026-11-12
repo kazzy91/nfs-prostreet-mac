@@ -1,12 +1,15 @@
 """Who calls an import, or uses a string? Code cross-references by byte pattern, mapped to manifest functions.
 
     python3 -I recomp/xrefs.py <exe> <manifest.tsv> --import Direct3DCreate9 [--import ...] [--string ".vp6" ...]
-                                                    [--calls 006E4280 ...]
+                                                    [--calls 006E4280 ...] [--class EAXSound ...]
 
 --import NAME: references to the import's IAT slot from the code section (call/jmp [slot], mov reg, [slot], push [slot]):
   each site with the manifest function containing it. A site that is a jump thunk (jmp [slot]) is followed one level:
   its direct callers are listed under it.
 --calls VA: direct callers of VA, i.e. call/jmp rel32 (E8/E9) whose target is VA, with their functions.
+--class NAME: a C++ class by its MSVC RTTI (NAME as in the type descriptor, e.g. EAXSound or rw::audio::core::Dac, or
+  the raw ".?AV...@@"): each vtable (from the complete object locators naming its type descriptor), its slot count
+  and first slots, and the functions that store the vtable address (constructors and destructors).
 --string TEXT: every occurrence of TEXT (ASCII, NUL-terminated) in the image's data sections, then every 4-byte
   little-endian use of its address in the code section (push offset, mov reg, offset, operands), with the function.
 A byte-pattern scan, not a disassembly: a hit can be a coincidence inside an instruction, so read it as a lead. Stdlib
@@ -78,6 +81,45 @@ def rel32_index(img):
     return idx
 
 
+def mangle(name):
+    """'rw::audio::core::Dac' -> '.?AVDac@core@audio@rw@@' (classes only); a raw '.?AV' name is kept."""
+    if name.startswith(".?A"):
+        return name
+    return ".?AV" + "".join(p + "@" for p in reversed(name.split("::"))) + "@"
+
+
+def data_sections(img):
+    for name, vs, rva, rs, _, chars in img.sections:
+        if not chars & 0x20000000 and rs:
+            yield img.base + rva, img.read(img.base + rva, rs) or b""
+
+
+def class_vtables(img, name):
+    """[(vtable VA, [slot function VAs], complete-object-locator VA)] for the RTTI class NAME."""
+    lo, hi = img.code()
+    raw = mangle(name).encode("latin-1") + b"\0"
+    tds = [base + i - 8 for base, sec in data_sections(img) for i in find_all(sec, raw)]
+    out = []
+    for td in tds:
+        for base, sec in data_sections(img):
+            for i in find_all(sec, struct.pack("<I", td)):
+                col = base + i - 12
+                head = img.read(col, 4)
+                if not head or struct.unpack("<I", head)[0] != 0:         # signature 0 on x86
+                    continue
+                for b2, s2 in data_sections(img):
+                    for j in find_all(s2, struct.pack("<I", col)):
+                        vt, slots = b2 + j + 4, []
+                        while True:
+                            v = img.read(vt + 4 * len(slots), 4)
+                            if not v or not lo <= struct.unpack("<I", v)[0] < hi:
+                                break
+                            slots.append(struct.unpack("<I", v)[0])
+                        if slots:
+                            out.append((vt, slots, col))
+    return sorted(set((v, tuple(s), c) for v, s, c in out))
+
+
 def string_refs(img, text):
     lo, hi = img.code()
     code = img.read(lo, hi - lo)
@@ -102,6 +144,7 @@ def main(argv):
     ap.add_argument("--import", dest="imports", action="append", default=[])
     ap.add_argument("--string", dest="strings", action="append", default=[])
     ap.add_argument("--calls", action="append", default=[], type=lambda v: int(v, 16))
+    ap.add_argument("--class", dest="classes", action="append", default=[])
     a = ap.parse_args(argv)
     img = pe_image.Image(a.exe)
     starts, names = load_starts(a.manifest)
@@ -123,6 +166,18 @@ def main(argv):
     for t in a.calls:
         print(f"calls to {t:08X} {names.get(t, '')}: {len(idx.get(t, []))}")
         callers(t, "  ")
+    for cname in a.classes:
+        vts = class_vtables(img, cname)
+        print(f"class {cname} ({mangle(cname)}): {len(vts)} vtable(s)")
+        lo, hi = img.code()
+        code = img.read(lo, hi - lo)
+        for vt, slots, col in vts:
+            users = sorted({owner(starts, names, lo + i) for i in find_all(code, struct.pack("<I", vt))})
+            print(f"  vtable {vt:08X} (locator {col:08X}): {len(slots)} slot(s)")
+            for k, f in enumerate(slots[:8]):
+                print(f"    [{k}] {f:08X} {names.get(f, '')}")
+            for f, n in users:
+                print(f"    stored by {f:08X} {n}")
     for text in a.strings:
         addrs, refs = string_refs(img, text)
         print(f"string {text!r}: at {', '.join(f'{x:08X}' for x in addrs) or 'nowhere'}; {len(refs)} code reference(s)")

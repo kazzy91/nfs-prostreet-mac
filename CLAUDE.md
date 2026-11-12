@@ -91,13 +91,13 @@ recorded here, code fingerprint pinned in `exe_fingerprint.py` behind a game pro
 PE inspection, import coverage, generic vs MW classification, this file. See `docs/PROSTREET_PHASE1.md`. Redo §1–2 on
 the Phase 0 exe.
 
-### Phase 2: function boundaries (in progress, 2026-11-12)
-Status: manifest in the repo (`recomp/functions_ps.tsv`, 35,288 starts of the demo exe), census and entry points in
-`docs/ps-census.md`. 51,078 traps in 3,257 functions, nearly all SSE scalar/packed float and `fcomip`/`fucomip`
-(Phase 3's translator work); 12 functions trap on something else. WinMain `004AF9A0`; window, D3D9 and the message
-pump run on a thread of their own (`004AFBC0`), the game on WinMain's thread (`006BF2D0`). MW's inline translator
-patches now apply only to MW's fingerprinted exe (`Recompiler.mw_patches`). Left: name the Snd engine's entry points
-and the main loop's frame function inside `006BF2D0`.
+### Phase 2: function boundaries ✅ (2026-11-12)
+Status: manifest `recomp/functions_ps.tsv` (35,288 starts of the demo exe); census, untranslatable list and entry
+points in `docs/ps-census.md`. 51,078 traps in 3,257 functions, nearly all SSE scalar/packed float and
+`fcomip`/`fucomip`; 12 functions trap on something else. WinMain `004AF9A0`; window, D3D9 and the message pump on a
+thread of their own (`004AFBC0`); game init `006BE380`, main loop in `006BF2D0`, frame function `006BE730`. Audio is
+`EAXSound` over RenderWare Audio (DAC thread `00877CA0`, one DirectSound buffer); movies are VP6. MW's inline
+translator patches apply only to MW's fingerprinted exe (`Recompiler.mw_patches`).
 - Ghidra headless auto-analysis of `nfs.exe` → a `functions_ps.tsv` manifest in the `functions_v13.tsv` format, with
   data-referenced starts and their call closure: `recomp/ghidra_functions.py --data-refs` (Ghidra 12.2 via Homebrew,
   JDK 25). Proven end to end on ProStreet's `server.dll`: 1,345 functions, all translated and compiled
@@ -109,7 +109,13 @@ and the main loop's frame function inside `006BF2D0`.
   engine entry points.
 - **Exit:** committed manifest; census in `docs/`; untranslatable-instruction list.
 
-### Phase 3: recompile
+### Phase 3: recompile (in progress)
+Status (2026-11-12): game profiles in `recomp/profiles.py` (`mw13` still builds with `build_all.py`; `ps_demo` with
+the new `recomp/build_game.py`). The whole demo exe translates (35,286 of 35,288 functions, 2 undecodable stubs) and
+compiles to `recomp/out/ps_demo/nfs.a` (arm64, 0 errors, ~50 s). It still holds 51,078 run-time traps in 3,257
+functions, so the ≥99 % criterion counts functions without traps: next is SSE in the translator
+(`docs/ps-census.md` has the order). MW's build_all.py passes and translator patches move into `mw13` when MW's build
+switches to build_game.py, which needs speed.exe to check.
 - Make the recompiler game-parameterized: a game profile with the exe path, fingerprint, function manifest, hooks
   file and inline patch tables. Move MW's inline patches out of `recomp.py`/`build_all.py` into the MW profile.
   The ProStreet profile starts empty.

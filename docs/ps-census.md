@@ -54,7 +54,7 @@ The two largest unreached gaps are `008D0D98` (4,280 bytes) and `007D992E` (2,62
 
 ## Entry points
 
-Found with `recomp/xrefs.py` (IAT slot references, thunks followed to their rel32 callers, `--calls`, `--string`).
+Found with `recomp/xrefs.py` (IAT slot references, thunks followed to their rel32 callers, `--calls`, `--string`, and `--class` for MSVC RTTI vtables).
 
 | What | Where |
 |---|---|
@@ -63,15 +63,30 @@ Found with `recomp/xrefs.py` (IAT slot references, thunks followed to their rel3
 | Window/device thread | `004AFBC0`: WinMain passes it to `008B72B0` (`_beginthreadex` + `SetThreadIdealProcessor` + `ResumeThread`) |
 | Window and D3D9 | `006F1450` → `006F1120`: `RegisterClassExA`, `CreateWindowExA`, `Direct3DCreate9` (thunk `007D98D4`, slot `00916520`). `CreateDevice` is a vtable call on the returned object |
 | Message pump | `006E4280`: `PeekMessageA`/`GetMessageA`/`TranslateMessage`/`DispatchMessageA`, called three times from `004AFBC0` |
-| Game main | `006BF2D0`, called by WinMain after the thread start. It reaches 800 functions within 4 levels, including the DirectInput set-up |
+| Game main | `006BF2D0`, called by WinMain after the thread start: `006BE380` (game init, 86 calls: timers, DirectInput, audio, …), then the main loop |
+| Main loop | `006BF371`–`006BF40A` in `006BF2D0`: reads the QPC timer (`00430AD0`, `00430B00`), limits the frame rate, calls the **frame function `006BE730`** (51 calls), and loops until the quit flag; then `SetEvent` to the window thread, `WaitForSingleObject`, shutdown (`006DDD50`, `00791E10`) |
 | DirectInput | `DirectInput8Create` thunk `007DA370`, called from `006F4D30` (via `006BF2D0` → … → `00689740`) and `0084E048` |
-| DirectSound | `DSOUND #1` (DirectSoundCreate) thunk `008D0D92`, called from `0086CC90` (via `00877770` and `0087D9F0`) |
-| Movies | VP6: `MOVIES\%s_english_ntsc.vp6` used in `0057E5F0`; player classes `MoviePlayerRW`, `rw::movie::AudioRenderer_Snd9`. MW's movies are VP6 too (FFmpeg path) |
+| Audio | Game layer `EAXSound` (as in MW: `EAXSound`, `EAXAemsManager`, `EAXS_StreamManager`, `EAXCar`, …) over **RenderWare Audio (RWAudioCore)**. Game init `006BE380` → `004FCA20` builds `EAXSound` (constructor `004EBE10`) and `RWAudioCoreWrapper` (`004FC700`) |
+| Audio DAC | `008821E0` (vtable slot at `00A2C950`) starts the "RWAudioCore Dac" thread `00877CA0` (`timeBeginPeriod`/`timeGetTime`/`Sleep` mixer pump, via `008B72B0`) and opens DirectSound: `0087D9F0` → `0086CC90` → `DSOUND #1` (DirectSoundCreate) thunk `008D0D92`. Commands reach the DAC through a queue (`008832A0` queues handlers `00882480`, `008825C0`, `008826A0`, `0087D920`) |
+| Movies | VP6: `MOVIES\%s_english_ntsc.vp6` used in `0057E5F0`; player classes `MoviePlayerRW`, `rw::movie::AudioRenderer_Snd9`; `008C50C0` starts the "VideoDecodeThread". MW's movies are VP6 too (FFmpeg path) |
+| File I/O | `0085C6C0` starts two `PATHI_servicetask` threads (`0085C630`): asynchronous file reads |
 
 **Difference from MW:** ProStreet runs the window, the D3D device and the message pump on a thread of its own
 (`004AFBC0`), and the game on WinMain's thread (`006BF2D0`), synchronised with events (`SetEvent` /
 `WaitForSingleObject`). Phase 5 has to run D3D/Metal and AppKit from that thread's work, which matters on macOS
 because AppKit wants the main thread.
+
+**Audio differs from MW underneath.** RWAudioCore mixes everything in software, in floats, and writes to one
+DirectSound secondary buffer (`PRIORITY` cooperative level, `GLOBAL` focus, per the library's own strings), so the
+host's DirectSound (`runtime/dsound.c`, secondary buffers over CoreAudio) has to carry one streaming buffer well.
+Check in Phase 6 how MW's use of it compares.
+
+**Threads:** WinMain's game thread, the window/device thread, the RWAudioCore DAC, the video decoder, two file
+service tasks and a few worker pools (`008BB130`, `0058BFD0`, `00849750`), all through `_beginthreadex` or
+`CreateThread`; the host has both (`runtime/threads.c`, `runtime/msvcr.c`).
+
+The demo was compiled with little optimisation in places (the audio command queue stores and reloads every local,
+`mov edx, 4; sub edx, 1`), so the code is larger than a retail /O2 build but easy to read.
 
 The game main also enumerates processes (`CreateToolhelp32Snapshot`, `Process32First/Next`). Its purpose isn't
 known yet; check it in Phase 5.
