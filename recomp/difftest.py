@@ -8,7 +8,17 @@
 3. For each function, K random states: registers point into a random scratch area, the stack holds random
    arguments. Run Unicorn first (skip the state if the original faults or runs > 2M instructions), then the C
    version in a forked child (so a translation bug that hangs or crashes can't take the run down).
-   Compare eax..edi/esp/ebp, ST(0), and every byte of scratch, stack and .data.
+   Compare eax..edi/esp/ebp, ST(0), xmm0-7, and every byte of scratch, stack and .data.
+
+    tools/.venv/bin/python -I recomp/difftest.py --game ps_demo --exe <nfs.exe> [--limit N] [--tests K]
+
+The same on another game profile's exe (recomp/profiles.py): the exe must carry the profile's code fingerprint, the
+functions come from the profile's manifest, and the public recomp/synth_emu.py maps the whole image (no developer
+emulator needed). Functions that read the time-stamp counter (rdtsc) aren't compared. A stored float that is a NaN on
+both sides counts as equal (which NaN an x87/SSE operation on two NaNs keeps differs between the reference and the
+port, and game code never reads NaN payloads); --synth stays byte-exact, its SSE cases check NaN results exactly.
+Reference fix-up in every mode: Unicorn (QEMU) leaves OF/SF/AF unchanged on fcomi/fucomi(p), which the translator and
+Bochs clear; a code hook clears them after each such instruction.
 
     tools/.venv/bin/python port/recomp/difftest.py --synth [--tests K] [--only-synth SUBSTR]
 
@@ -39,6 +49,15 @@ import listing  # noqa: E402
 import recomp  # noqa: E402
 
 SCRATCH, SCRATCH_SIZE = 0x20000000, 0x10000
+def nan32(b):
+    """4 bytes holding a single-precision NaN (any sign, quiet or signaling, any payload)."""
+    if len(b) != 4:
+        return False
+    u = int.from_bytes(b, "little")
+    return u & 0x7F800000 == 0x7F800000 and u & 0x7FFFFF != 0
+
+
+FCOMI = {"fcomi", "fucomi", "fcomip", "fucomip", "fcompi", "fucompi"}
 STACK_HI = 0x7FF00000
 STACK_LO = STACK_HI - 0x100000
 REGS = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"]
@@ -239,6 +258,58 @@ def synth_cases():
                                    f"movq qword ptr [edi], mm0\nmovq qword ptr [edi+8], mm1\nemms", 0),
         ("movntq", f"{ptr('esi')}\n{ptr('edi')}\nmovq mm3, qword ptr [esi]\nmovntq qword ptr [edi+8], mm3\nemms", 0),
     ]
+    # SSE2 integer: every MMX operation on xmm (both halves; unpack and pack cross them), then 128-bit moves,
+    # byte shifts, shuffles and dword/double conversions
+    for op in sorted(recomp.MMX_OPS):
+        if op in recomp.MMX_SHIFTS:
+            cases += [
+                (f"{op} xmm, imm", f"{x_in}\n{op} xmm0, 3\n{op} xmm1, 13\n{x_out}", 0),
+                (f"{op} xmm, big imm", f"{x_in}\n{op} xmm0, 40\n{op} xmm1, 70\n{x_out}", 0),
+                (f"{op} xmm, xmm", f"{ptr('esi')}\nand dword ptr [esi+16], 0x3f\nmov dword ptr [esi+20], 0\n{x_in}\n{op} xmm0, xmm1\n{x_out}", 0),
+                (f"{op} xmm, m128", f"{ptr('esi')}\nand dword ptr [esi+48], 0x1f\nmov dword ptr [esi+52], 0\n{x_in}\n{op} xmm0, xmmword ptr [esi+48]\n{x_out}", 0),
+            ]
+        else:
+            cases += [(f"{op} xmm, xmm", f"{x_in}\n{op} xmm0, xmm1\n{op} xmm2, xmm2\n{x_out}", 0),
+                      (f"{op} xmm, m128", f"{x_in}\n{op} xmm1, xmmword ptr [esi+48]\n{x_out}", 0)]
+    sd_small = ("push ecx\nmov ecx, 8\n1: and dword ptr [esi+ecx*8-4], 0x800fffff\nor dword ptr [esi+ecx*8-4], 0x41000000\n"
+                "loop 1b\npop ecx")
+    cases += [
+        ("movdqa/movdqu/movapd/movupd", f"{x_in}\nmovdqa xmm0, xmmword ptr [esi+48]\nmovdqu xmm1, xmmword ptr [esi+52]\nmovapd xmm2, xmm0\n"
+                                        f"movupd xmmword ptr [edi+52], xmm1\nmovdqa xmmword ptr [edi+80], xmm2\nmovdqu xmm2, xmm1\n{x_out}", 0),
+        ("movq xmm", f"{x_in}\nmovq xmm0, qword ptr [esi+48]\nmovq xmm1, xmm2\nmovq qword ptr [edi+56], xmm2\n{x_out}", 0),
+        ("movd xmm", f"{x_in}\nmovd xmm0, eax\nmovd xmm1, dword ptr [esi+48]\nmovd ecx, xmm2\nmovd dword ptr [edi+60], xmm2\n{x_out}", 0),
+        ("movdq2q/movq2dq", f"{x_in}\nmovdq2q mm0, xmm1\nmovq mm1, qword ptr [esi+48]\nmovq2dq xmm2, mm1\nmovq qword ptr [edi+64], mm0\n{x_out}\nemms", 0),
+        ("punpcklqdq/punpckhqdq", f"{x_in}\npunpcklqdq xmm0, xmm1\npunpckhqdq xmm1, xmmword ptr [esi+48]\npunpckhqdq xmm2, xmm2\n{x_out}", 0),
+        ("psrldq/pslldq", f"{x_in}\npsrldq xmm0, 3\npslldq xmm1, 9\npsrldq xmm2, 16\n{x_out}", 0),
+        ("pslldq 0/15", f"{x_in}\npslldq xmm0, 0\npslldq xmm1, 15\npsrldq xmm2, 15\n{x_out}", 0),
+        ("pshufd", f"{x_in}\npshufd xmm0, xmm1, 0x1b\npshufd xmm1, xmmword ptr [esi+48], 0xd2\npshufd xmm2, xmm2, 0x00\n{x_out}", 0),
+        ("pshuflw/pshufhw", f"{x_in}\npshuflw xmm0, xmm1, 0x1b\npshufhw xmm1, xmmword ptr [esi+48], 0xd2\npshufhw xmm2, xmm2, 0x39\n{x_out}", 0),
+        ("pmovmskb/pextrw/pinsrw xmm", f"{x_in}\npmovmskb eax, xmm0\npextrw ecx, xmm1, 6\npinsrw xmm2, edx, 5\npinsrw xmm0, word ptr [esi+48], 7\n{x_out}", 0),
+        ("cvtdq2ps", f"{x_in}\ncvtdq2ps xmm0, xmm1\ncvtdq2ps xmm1, xmmword ptr [esi+48]\n{x_out}", 0),
+        ("cvtps2dq/cvttps2dq", f"{x_small}\ncvtps2dq xmm0, xmm1\ncvttps2dq xmm1, xmmword ptr [esi+48]\ncvttps2dq xmm2, xmm2\n{x_out}", 0),
+        ("cvtps2dq/cvttps2dq any", f"{x_in}\ncvtps2dq xmm0, xmm1\ncvttps2dq xmm1, xmm2\n{x_out}", 0),
+        ("cvttsd2si/cvtsd2si", f"{ptr('esi')}\n{sd_small}\n{x_in}\ncvttsd2si eax, xmm0\ncvtsd2si ecx, xmm1\ncvttsd2si edx, qword ptr [esi+48]\n"
+                               f"cvtsd2si ebx, qword ptr [esi+56]", 0),
+        ("cvttsd2si any", f"{x_in}\ncvttsd2si eax, xmm0\ncvtsd2si ecx, qword ptr [esi+48]", 0),
+    ]
+    # bswap, bsr/bsf (a zero source leaves the destination and sets ZF), jcxz (CX, not ECX), rep ret, cmpxchg8b
+    cases += [
+        ("bswap", "bswap eax\nbswap esi", 0),
+        ("bswap twice", "bswap ecx\nbswap ecx", 0),
+        ("cmpxchg8b differ", f"{ptr('esi')}\nlock cmpxchg8b qword ptr [esi]", ZF),
+        ("cmpxchg8b equal", f"{ptr('esi')}\nmov eax, dword ptr [esi]\nmov edx, dword ptr [esi+4]\nlock cmpxchg8b qword ptr [esi]", ZF),
+        ("cmpxchg8b plain", f"{ptr('esi')}\nmov eax, dword ptr [esi+8]\nmov edx, dword ptr [esi+12]\ncmpxchg8b qword ptr [esi+8]", ZF),
+        ("jcxz", "and ecx, 0x10001\njcxz 1f\ninc eax\n1:", 0),
+        ("rep ret", "add eax, ecx\nrep ret", 0),
+    ]
+    for op in ("bsr", "bsf"):
+        cases += [
+            (f"{op} r32", f"{op} eax, ecx\n{op} edx, ebx", ZF),
+            (f"{op} m32", f"{ptr('esi')}\n{op} eax, dword ptr [esi]", ZF),
+            (f"{op} zero", f"xor ecx, ecx\n{op} eax, ecx", ZF),
+            (f"{op} r16", f"{op} ax, cx\n{op} dx, word ptr [esp+4]", ZF),
+            (f"{op} r16 zero", f"xor ecx, ecx\n{op} ax, cx", ZF),
+        ]
     # x87 compares into EFLAGS (P6): capstone's fcompi/fucompi pop; fcomi/fucomi don't. st(1) and st(2).
     f3 = f"{ptr('esi')}\nfld dword ptr [esi]\nfld dword ptr [esi+4]\nfld dword ptr [esi+8]"
     for op in ("fcomi", "fucomi", "fcomip", "fucomip"):
@@ -279,6 +350,24 @@ def synth_assemble(cases, workdir):
         if name == b".text":
             return elf[sh[4]:sh[4] + sh[5]]
     raise RuntimeError("no .text in " + obj)
+
+
+def image_layout(pe):
+    """(image [(va, bytes)], .data (va, size), .data's initial bytes (va, bytes)) for recomp.PE/SynthPE (raw-file
+    sections, bytes names) or pe_image.Image (a mapped image, str names)."""
+    if isinstance(pe, recomp.PE):
+        data_sec = [(pe.base + va, max(vs, rs)) for nm, vs, va, rs, raw in pe.sections if nm.startswith(b".data")][0]
+        image = [(pe.base + va, pe.data[raw:raw + rs]) for nm, vs, va, rs, raw in pe.sections]
+        data_init = [(pe.base + va, (pe.data[raw:raw + rs] + bytes(max(vs, rs)))[:max(vs, rs)])
+                     for nm, vs, va, rs, raw in pe.sections if nm.startswith(b".data")][0]
+        return image, data_sec, data_init
+    image = []
+    for nm, vs, rva, rs, _, _ in pe.sections:
+        n = min(max(vs, rs), pe.size - rva)
+        if n > 0:
+            image.append((pe.base + rva, pe.read(pe.base + rva, n)))
+    data = [(va, b) for (va, b), sec in zip(image, pe.sections) if sec[0] == ".data"][0]
+    return image, (data[0], len(data[1])), data
 
 
 class SynthPE(recomp.PE):
@@ -577,6 +666,8 @@ def main():
     ap.add_argument("--compile-only", action="store_true", help="compile selected cases without importing Unicorn")
     ap.add_argument("--audit-baseline", action="store_true", help="with --audit-native: compile HEAD translator/header")
     ap.add_argument("--audit-native", action="store_true", help="deterministic audit checks, no Unicorn import")
+    ap.add_argument("--game", help="a game profile (recomp/profiles.py) instead of MW's speed.exe, e.g. ps_demo")
+    ap.add_argument("--exe", help="with --game: the executable (default: the profile's environment variable)")
     args = ap.parse_args()
     if args.audit_native:
         return audit_native(args.audit_baseline)
@@ -592,6 +683,16 @@ def main():
         synth_code = synth_assemble(cases, tempfile.mkdtemp(prefix="synth_"))
         funcs = [(SYNTH_BASE + k * SYNTH_SLOT, SYNTH_BASE + (k + 1) * SYNTH_SLOT, nm) for k, (nm, _, _) in enumerate(cases)]
         rc = recomp.Recompiler(pe=SynthPE(synth_code), functions={a: s for a, s, _ in funcs})
+    elif args.game:
+        import build_game
+        import profiles
+        profile = profiles.PROFILES[args.game]
+        exe = args.exe or os.environ.get(profile.exe_env)
+        if not exe:
+            ap.error(f"--exe or ${profile.exe_env} must name the executable")
+        img = build_game.open_image(exe, profile)      # refuses an exe without the profile's code fingerprint
+        funcs = build_game.functions(img, profile)
+        rc = recomp.Recompiler(pe=img, functions={a: s for a, s, _ in funcs})
     else:
         funcs = load_functions()
         rc = recomp.Recompiler(functions={a: s for a, s, _ in funcs})
@@ -599,14 +700,20 @@ def main():
     ok, reasons = [], {}
     callees = {}
     total_insn_ok = 0
+    fcomi_at = set()
+    nondet = 0
     for a, size, name in funcs:
         code, why = rc.translate(a, size)
-        if code:
+        if code and any(i.mnemonic == "rdtsc" for i in rc.seen.values()):
+            nondet += 1              # the time-stamp counter differs between the two runs by nature: not comparable
+        elif code:
             ok.append((a, size, name))
             callees[a] = set(rc.callees)
+            fcomi_at |= {x for x, i in rc.seen.items() if i.mnemonic in FCOMI}
         else:
             reasons[why] = reasons.get(why, 0) + 1
-    print(f"translatable now: {len(ok)} of {len(funcs)} functions")
+    print(f"translatable now: {len(ok) + nondet} of {len(funcs)} functions" +
+          (f" ({nondet} read the time-stamp counter (rdtsc) and aren't compared)" if nondet else ""))
     if args.synth:
         good_a = {f[0] for f in ok}
         for a, _, nm in funcs:
@@ -657,21 +764,23 @@ def main():
         return 0
     global speed_emu
     try:
+        if args.game:
+            raise ImportError                         # a profile's exe runs on the public emulator, image mapped whole
         import speed_emu
     except ImportError:    # the x86 emulator is developer tooling, not part of a public checkout
-        if not args.synth:
+        if not args.synth and not args.game:
             print("SKIP: differential test needs the developer emulator tools/scripts/speed_emu.py (not in a public checkout)")
             return 3
         import synth_emu as speed_emu   # --synth needs only a mapped stack and return trap (recomp/synth_emu.py)
-        print("note: tools/scripts/speed_emu.py absent; --synth runs on recomp/synth_emu.py")
+        if args.game:
+            speed_emu.IMAGE_BASE, speed_emu.IMAGE_SIZE = rc.pe.base, (rc.pe.size + 0xFFFF) & ~0xFFFF
+        else:
+            print("note: tools/scripts/speed_emu.py absent; --synth runs on recomp/synth_emu.py")
     from unicorn import UcError
-    from unicorn.x86_const import UC_X86_REG_EIP, UC_X86_REG_FP0, UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG
-    from unicorn import UC_ERR_EXCEPTION, UC_HOOK_INTR
-    pe = rc.pe
-    data_sec = [(pe.base + va, max(vs, rs)) for nm, vs, va, rs, raw in pe.sections if nm.startswith(b".data")][0]
-    image = [(pe.base + va, pe.data[raw:raw + rs]) for nm, vs, va, rs, raw in pe.sections]
-    data_init = [(pe.base + va, (pe.data[raw:raw + rs] + bytes(max(vs, rs)))[:max(vs, rs)])
-                 for nm, vs, va, rs, raw in pe.sections if nm.startswith(b".data")][0]
+    from unicorn.x86_const import UC_X86_REG_EIP, UC_X86_REG_FP0, UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG, UC_X86_REG_XMM0
+    from unicorn import UC_ERR_EXCEPTION, UC_HOOK_CODE, UC_HOOK_INTR
+    from unicorn.x86_const import UC_X86_REG_EFLAGS
+    image, data_sec, data_init = image_layout(rc.pe)
 
     def guest_write(a, b):
         ctypes.memmove(gbase + a, b, len(b))
@@ -690,10 +799,20 @@ def main():
             other_intr.append(intno)
             uc.emu_stop()
 
+    def fcomi_flags(uc, address, size, state):
+        # Unicorn (QEMU) leaves OF/SF/AF unchanged on fcomi/fucomi(p); Bochs and the translator clear them (an SDM
+        # mirror says all three are set to 0, Intel's notices confirm OF). Clear them on the next instruction so
+        # `lahf` after a compare isn't counted against the translation. Game code tests only ZF/PF/CF here.
+        if state[0]:
+            uc.reg_write(UC_X86_REG_EFLAGS, uc.reg_read(UC_X86_REG_EFLAGS) & ~0x890)
+        state[0] = address in fcomi_at
+
     def make_emu(int3_hook=True):
         e = speed_emu.SpeedEmu(heap_size=0x1000)
         if int3_hook:
             e.uc.hook_add(UC_HOOK_INTR, int3_continue)
+        if fcomi_at:
+            e.uc.hook_add(UC_HOOK_CODE, fcomi_flags, [False])
         e.uc.mem_map(SCRATCH, SCRATCH_SIZE)
         if synth_code:
             e.uc.mem_map(SYNTH_BASE, (len(synth_code) + 0xFFFF) & ~0xFFFF)
@@ -709,7 +828,7 @@ def main():
     def guest_read(a, n):
         return ctypes.string_at(gbase + a, n)
 
-    passed = failed = skipped = crashed = 0
+    passed = failed = skipped = crashed = nan_payload = 0
     fail_list, no_verdict, xfail = [], [], []
     for a, size, name in sample:
         idx = index_of[a]
@@ -737,6 +856,8 @@ def main():
             emu.uc.reg_write(UC_X86_REG_FPCW, 0x027F)
             emu.uc.reg_write(UC_X86_REG_FPSW, 0)           # TOP = 0, flags clear
             emu.uc.reg_write(UC_X86_REG_FPTAG, 0xFFFF)     # all registers empty
+            for k in range(8):                             # xmm0-7 zero, as in the C side's fresh Cpu
+                emu.uc.reg_write(UC_X86_REG_XMM0 + k, 0)
             ref_fault = False
             try:
                 emu.uc.emu_start(a, speed_emu.RETURN_TRAP, count=2_000_000)
@@ -761,6 +882,7 @@ def main():
                 continue
             w_top = (emu.uc.reg_read(UC_X86_REG_FPSW) >> 11) & 7       # Unicorn's FP0..7 are physical registers
             w_st0 = fp80(*emu.uc.reg_read(UC_X86_REG_FP0 + w_top)) if w_top != 0 else None
+            w_xmm = [emu.uc.reg_read(UC_X86_REG_XMM0 + k) for k in range(8)]
             w_scr = bytes(emu.uc.mem_read(SCRATCH, SCRATCH_SIZE))
             w_stk = bytes(emu.uc.mem_read(esp - 0x400, 0x800))
             w_dat = bytes(emu.uc.mem_read(*data_sec))
@@ -791,12 +913,22 @@ def main():
                 for r in REGS:
                     if got[r] != want[r]:
                         msg.append(f"{r} {got[r]:#x} != {want[r]:#x}")
+                for k in range(8):
+                    g = c.xmm[k].q[0] | c.xmm[k].q[1] << 64
+                    if g != w_xmm[k]:
+                        msg.append(f"xmm{k} {g:032x} != {w_xmm[k]:032x}")
                 g_st0 = c.st[c.top & 7] if c.top != 0 else None
                 if (w_st0 is None) != (g_st0 is None) or (w_st0 is not None and not (
                         w_st0 == g_st0 or (w_st0 != w_st0 and g_st0 != g_st0) or abs(w_st0 - g_st0) <= 1e-9 * max(1, abs(w_st0)))):
                     msg.append(f"st0 {g_st0} != {w_st0}")
+                nan_only = False
                 for nm_, base_, want_b in (("scratch", SCRATCH, w_scr), ("stack", esp - 0x400, w_stk), (".data", data_sec[0], w_dat)):
                     got_b = guest_read(base_, len(want_b))
+                    if got_b != want_b and args.game and all(
+                            nan32(got_b[j:j + 4]) and nan32(want_b[j:j + 4])
+                            for j in range(0, len(want_b), 4) if got_b[j:j + 4] != want_b[j:j + 4]):
+                        nan_only = True       # only which NaN came out differs (game code never reads NaN payloads)
+                        continue
                     if got_b != want_b:
                         k = next(j for j in range(len(want_b)) if got_b[j] != want_b[j])
                         k4 = k & ~3
@@ -804,7 +936,7 @@ def main():
                         gf, wf = struct.unpack("<f", gw)[0], struct.unpack("<f", ww)[0]
                         nd = sum(1 for j in range(len(want_b)) if got_b[j] != want_b[j])
                         msg.append(f"{nm_} differs at {base_ + k:#x} ({nd} bytes): got {gw.hex()} ({gf:.6g}) want {ww.hex()} ({wf:.6g})")
-                os.write(wfd, ("; ".join(msg) or "OK").encode()[:4000])
+                os.write(wfd, ("; ".join(msg) or ("OKNAN" if nan_only else "OK")).encode()[:4000])
                 os._exit(0)
             os.close(wfd)
             import select
@@ -818,6 +950,8 @@ def main():
                 out = f"CRASH status {status}"
             verdicts.append(out)
         verdicts = [v for v in verdicts if v != "SKIP"]
+        nan_payload += sum(v == "OKNAN" for v in verdicts)
+        verdicts = ["OK" if v == "OKNAN" else v for v in verdicts]
         if not verdicts:
             no_verdict.append(name)
             continue
@@ -833,6 +967,8 @@ def main():
             fail_list.append((a, name, bad))
     print(f"differential test: {len(sample)} functions sampled, {passed} pass, {failed} fail "
           f"({crashed} crash/timeout), {len(xfail)} expected-fail, {len(no_verdict)} no-verdict, states skipped because the original faulted: {skipped}")
+    if nan_payload:
+        print(f"  states where only the NaN produced differed (accepted with --game): {nan_payload}")
     for a, name, why in xfail:
         print(f"  XFAIL {a:08x} {name}: {AUDIT_XFAIL[name]}: {why[:160]}")
     for a, name, why in fail_list[:40 if not args.synth else 400]:

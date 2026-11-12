@@ -11,9 +11,13 @@ recomp/ghidra/ExportFunctions.java, then writes the function starts:
            static initializers), with MW's build_all.add_data_referenced rules on any 32-bit PE: code pointers in the
            data sections and code immediates (push/mov) at a 16-byte boundary or after padding/ret/jmp, every entry
            of a `push end; push start; call _initterm` table, each checked with listing.py's plausible-start test on a
-           capstone sweep of the code section. Then a call closure: the new functions are walked by recursive
-           descent and every direct call target they reach becomes a start too, until nothing new turns up (code
-           reached only through a pointer was never explored by Ghidra, so neither were its callees).
+           capstone sweep of the code section. Then a call closure: every function (Ghidra's and the new ones) is
+           walked by recursive descent and every direct call target it reaches becomes a start too, until nothing new
+           turns up. Code reached only through a pointer was never explored by Ghidra, so neither were its callees,
+           and Ghidra also leaves some direct call targets inside a neighbour's body (ProStreet: small constructors
+           after a jmp-only function, an import thunk). Direct calls seen anywhere in the linear sweep count too (switch
+           cases reached only through a jump table), when the target passes the same plausible-start test. A
+           `call $+5` (the get-EIP idiom) is not a start, and neither is an address holding int3 (padding).
            Needs capstone (tools/.venv/bin/python).
 The input is only read (Ghidra imports a copy into its project); nothing is executed. The manifest holds addresses and
 names only, no code bytes, so it is committable metadata (CLAUDE.md rule 1).
@@ -129,7 +133,7 @@ def data_referenced(path, rows, rva):
                 return data[s["raw_off"] + o:s["raw_off"] + o + n]
         return None
     # a linear sweep of the code section, as listing.py does for speed.exe
-    starts, ends, imms = set(), {}, set()
+    starts, ends, imms, calls = set(), {}, set(), set()
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     pos = 0
     while pos < len(blob):
@@ -140,6 +144,10 @@ def data_referenced(path, rows, rva):
         a, n, mn, ops = insn
         starts.add(a)
         ends[a + n] = (a, listing.kind(mn, ops))
+        if mn == "call" and n == 5 and blob[pos] == 0xE8:
+            t = (a + 5 + int.from_bytes(blob[pos + 1:pos + 5], "little", signed=True)) & 0xFFFFFFFF
+            if lo <= t < hi and t != a + 5:
+                calls.add(t)
         if mn in ("push", "mov") and n >= 5:
             imm = int.from_bytes(blob[pos + n - 4:pos + n], "little")
             if lo <= imm < hi:
@@ -149,6 +157,8 @@ def data_referenced(path, rows, rva):
     names = {a + (base if rva else 0): nm for a, nm in rows}
 
     def boundary_ok(t):
+        if read(t, 1) == b"\xcc":                    # int3 padding between functions, never a start
+            return False
         prev, before = read(t - 1, 1), read(t - 5, 5)
         after = before is not None and (before[0] == 0xE9 or before[3] == 0xEB or before[2] == 0xC2)
         return t % 16 == 0 or prev in (b"\xcc", b"\xc3", b"\x90") or after
@@ -176,21 +186,26 @@ def data_referenced(path, rows, rva):
                 t = int.from_bytes(read(a, 4) or b"\0\0\0\0", "little")
                 if lo <= t < hi and t not in known:
                     extra.add(t)
-    called = call_closure(extra, known, read, lo, hi, md)
+    # direct calls the sweep sees anywhere, e.g. in switch cases reached only through a jump table, which recursive
+    # descent from a start doesn't follow: the same plausible-start rules as data pointers
+    swept = {t for t in calls if t not in known and t not in extra and boundary_ok(t) and _plausible(t, starts, ends)}
+    called = call_closure(extra | swept, known, read, lo, hi, md, roots=known) | swept
     return sorted([(t - (base if rva else 0), f"data_ref_{t:08X}") for t in extra] +
                   [(t - (base if rva else 0), f"called_{t:08X}") for t in called])
 
 
-def call_closure(new, known, read, lo, hi, md):
-    """Direct call targets reachable from the functions starting at `new` (recursive descent inside each function,
-    stopping at returns, indirect jumps and other functions' starts), repeated over the targets themselves."""
-    found, queue = set(), sorted(new)
+def call_closure(new, known, read, lo, hi, md, roots=()):
+    """Direct call targets that aren't starts yet, reachable from the functions at `new` and `roots` (recursive
+    descent inside each function, stopping at returns, indirect jumps and other functions' starts), repeated over the
+    targets themselves."""
+    stop = set(known) | set(new)                      # every start; `found` grows beside it
+    found, queue = set(), sorted(set(roots) | set(new))
     while queue:
         start = queue.pop()
         work, seen = [start], set()
         while work and len(seen) < 50000:
             at = work.pop()
-            while lo <= at < hi and at not in seen and (at == start or at not in known | new | found):
+            while lo <= at < hi and at not in seen and (at == start or (at not in stop and at not in found)):
                 seen.add(at)
                 code = read(at, 16)
                 insn = next(md.disasm(code, at), None) if code else None
@@ -199,7 +214,8 @@ def call_closure(new, known, read, lo, hi, md):
                 mn, nxt = insn.mnemonic, at + insn.size
                 target = int(insn.op_str, 16) if insn.op_str.startswith("0x") else None
                 if mn == "call":
-                    if target is not None and lo <= target < hi and target not in known | new | found:
+                    if (target is not None and lo <= target < hi and target != nxt and target not in stop
+                            and target not in found):
                         found.add(target)
                         queue.append(target)
                 elif mn.startswith("ret") or mn in ("hlt", "ud2", "int3"):

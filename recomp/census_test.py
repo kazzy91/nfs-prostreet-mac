@@ -12,7 +12,8 @@ The code section holds one function per instruction class, each 16 bytes apart f
   f6 haddps xmm0, xmm1; ret                              SSE3+ 1
   f7 call [GetTickCount's IAT slot]; ret                 an import call
 Checked: function/stub counts, every class count, the eight "other" instructions (seven rets and the call), that the
-SSE2 instructions are trapped while x87/MMX/string code is not, the stub reason, imports by DLL, the Markdown table, and
+SSE2/SSE3 instructions the translator lacks (paddq, haddps) are trapped while x87/MMX/SSE moves/string code is not,
+the stub reason, imports by DLL, the Markdown table, and
 pe_image's mapping (code range, IAT slots, refusing to move an image without relocations).
 The main run uses two worker processes; the mutant runs in-process (jobs=1), where a patched classify() applies.
 Check of the check: with classify() replaced by one that calls everything "other", the class checks must fail.
@@ -81,8 +82,9 @@ def main():
         check("instructions by class", r["by_class"] == want, r["by_class"])
         check("instruction total", r["instructions"] == sum(want.values()), r["instructions"])
         traps = {a for a, _ in r["trap_list"]}
-        check("the SSE2 instructions are trapped", {"00401030", "00401034"} <= traps, r["trap_list"])
-        check("x87, MMX and string code is not trapped", not traps & {"00401000", "00401004", "00401010", "00401013", "00401016", "00401040", "00401042"},
+        # paddq (64-bit lanes) and SSE3 haddps aren't translated; movaps (SSE) and movapd (SSE2 move) are
+        check("untranslated SSE2/SSE3 instructions are trapped", traps == {"00401030", "00401060"}, r["trap_list"])
+        check("x87, MMX, SSE moves and string code are not trapped", not traps & {"00401000", "00401004", "00401010", "00401013", "00401016", "00401020", "00401034", "00401040", "00401042"},
               r["trap_list"])
         check("trap reasons name the instruction", all(any(m in why for m in ("sse", "movaps", "movapd", "haddps", "paddq")) for _, why in r["trap_list"]),
               r["trap_reasons"])

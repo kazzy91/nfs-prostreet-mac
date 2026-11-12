@@ -3,7 +3,7 @@
 
 Run: tools/.venv/bin/python -I recomp/build_game_test.py        (capstone; the compile case needs clang)
 
-The exe's code holds four functions: a leaf, a caller of it, one with an instruction the translator traps (a segment register read), and
+The exe's code holds four functions: a leaf, a caller of it, one reading SS (Win32's selector) and then an instruction the translator traps (port I/O), and
 one whose bytes don't decode (a stub). A temporary profile pins its code fingerprint and points at a manifest and a
 hooks file naming the leaf. Checked: an exe with other code is refused before anything is written; funcs.h declares
 every function plus the hooked one's _orig; the hooked body is f_X_orig with a weak f_X; table.c lists every start and
@@ -30,7 +30,7 @@ def exe(flip=False):
     t = bytearray(b"\xcc" * 0x3000)
     t[0x00:0x06] = b"\xb8\x01\x00\x00\x00\xc3"                                   # mov eax, 1; ret
     t[0x10:0x16] = b"\xe8" + struct.pack("<i", LEAF - (CALLER + 5)) + b"\xc3"    # call leaf; ret
-    t[0x20:0x23] = b"\x8c\xd0\xc3"                                               # mov eax, ss (a trap); ret
+    t[0x20:0x24] = b"\x8c\xd0\xec\xc3"                                           # mov eax, ss; in al, dx (a trap); ret
     t[0x30:0x33] = b"\x0f\x04\xc3"                                               # undecodable: a stub
     if flip:
         t[0x01] = 2
@@ -82,7 +82,7 @@ class BuildGame(unittest.TestCase):
         self.assertEqual((r["functions"], r["translated"]), (4, 3))
         self.assertEqual(sum(r["stubs"].values()), 1)
         self.assertEqual(sum(r["traps"].values()), 1, r["traps"])
-        self.assertEqual(list(r["traps"]), ["reg ss"])
+        self.assertEqual(list(r["traps"]), ["in"])
         h = self.read("funcs.h")
         for a in (LEAF, CALLER, TRAP, BAD):
             self.assertIn(f"void f_{a:08X}(Cpu *c);", h)
@@ -91,6 +91,7 @@ class BuildGame(unittest.TestCase):
         self.assertIn(f"void f_{LEAF:08X}_orig(Cpu *restrict c) {{", c)
         self.assertIn(f"__attribute__((weak)) void f_{LEAF:08X}(Cpu *c) {{ f_{LEAF:08X}_orig(c); }}", c)
         self.assertIn(f"untranslated(c, 0x{BAD:08X}u); }}", c)
+        self.assertIn("(uint16_t)0x23u", c)                                     # ss reads as Win32's user selector
         t = self.read("table.c")
         self.assertIn("const unsigned guest_func_count = 4;", t)
         self.assertIn(f'const char game_exe_fingerprint[] = "{exe_fingerprint.PROFILES["synth"]["fingerprint"]}";', t)

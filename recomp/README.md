@@ -6,7 +6,7 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 |---|---|
 | `recomp.py` | Translator: one C function per guest function (`void f_XXXXXXXX(Cpu *c)`) |
 | `runtime.h` | `Cpu` struct, guest memory macros (`M32(a)` = `G + a`), flag helpers, x87 emulation |
-| `difftest.py` | Differential tests against the original code under Unicorn. `--synth` also runs without MW's `speed.exe` and developer emulator (a stand-in image and `synth_emu.py`); `difftest_synth_test.py` checks its verdict |
+| `difftest.py` | Differential tests against the original code under Unicorn. `--synth` also runs without MW's `speed.exe` and developer emulator (a stand-in image and `synth_emu.py`); `difftest_synth_test.py` checks its verdict. `--game ps_demo --exe <nfs.exe>` tests a profile's real functions (leaves, or `--calls` with their callees) on `synth_emu.py` with the whole image mapped; `difftest_game_test.py` |
 | `synth_emu.py` | Public stand-in for the developer emulator, enough for `difftest.py --synth`: Unicorn with the stack and return trap mapped |
 | `build_all.py` | Translates all of `speed.exe` and compiles it → `out/speed.a` |
 | `profiles.py` | Game profiles: each exe's fingerprint profile, function manifest, hooks file, output names and builder (`mw13` → `build_all.py`, `ps_demo` → `build_game.py`) |
@@ -20,7 +20,7 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 | `xrefs.py` | Who calls an import or uses a string: IAT-slot references (a `jmp [slot]` thunk is followed to its rel32 callers), `--calls VA` (E8/E9 callers), `--string`; each hit mapped to its manifest function. Byte patterns, so read hits as leads. Test: `xrefs_test.py` |
 | `authenticode.py` | Stdlib Authenticode check: the PE hash, the signed digest and the RSA signature, and the signer certificate's SHA-256 (EA's 2007 certificate is pinned). Proves an exe is the publisher's unmodified build. Test: `authenticode_test.py` |
 | `exe_fingerprint.py` | Code fingerprints per game profile (`mw13`: speed.exe v1.3; `ps_demo`: ProStreet's demo-release nfs.exe); `identify()` names the profile or returns None |
-| `functions_ps.tsv` | ProStreet's function manifest (addresses and Ghidra names only, no bytes): 35,288 starts of the `ps_demo` nfs.exe. See `docs/ps-census.md` |
+| `functions_ps.tsv` | ProStreet's function manifest (addresses and Ghidra names only, no bytes): 35,247 starts of the `ps_demo` nfs.exe. See `docs/ps-census.md` |
 
 ## How it translates
 
@@ -29,7 +29,7 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 - **Stack:** the guest stack is real guest memory, and calls push the guest return address, so stack-passed arguments and `ret n` work unchanged.
 - **Control flow:** branches become `goto`. Switch jump tables (`jmp [reg*4+table]`) become a C `switch`. Direct calls become C calls. Indirect calls/jumps go through `dispatch(c, addr)`. Tail jumps, conditional tail jumps and fall-through into the next function call the target and return. IAT calls go to `host_import(c, slot)`.
 - **MW-only patches:** a few instructions at MW addresses (positional audio, Extra EA Trax, car85, the Lua resume, X360 data) are rewritten only when the image is MW's fingerprinted speed.exe (`Recompiler.mw_patches`; test `mw_patches_test.py`). Any other image translates as is.
-- **SSE (single precision):** `xmm0-7` live in `Cpu` (`Xmm`, a union of float/int lanes). Scalar and packed float arithmetic, compares (`comiss`/`ucomiss` into EFLAGS, `cmpXXps/ss` masks), logic, shuffles, moves and the MMX conversions. Each operation is one IEEE single-precision step, exactly as on x86. NaN results follow x86 (a NaN operand comes back quieted, and an invalid operation gives the negative default NaN `0xFFC00000`). Conversions give `0x80000000` out of range and round as MXCSR.RC says. `rcp`/`rsqrt` are computed in full precision; the hardware's 12-bit approximations differ between CPU makers anyway. SSE2 integer and double instructions still trap.
+- **SSE (single precision):** `xmm0-7` live in `Cpu` (`Xmm`, a union of float/int lanes). Scalar and packed float arithmetic, compares (`comiss`/`ucomiss` into EFLAGS, `cmpXXps/ss` masks), logic, shuffles, moves and the MMX conversions. Each operation is one IEEE single-precision step, exactly as on x86. NaN results follow x86 (a NaN operand comes back quieted, and an invalid operation gives the negative default NaN `0xFFC00000`). Conversions give `0x80000000` out of range and round as MXCSR.RC says. `rcp`/`rsqrt` are computed in full precision; the hardware's 12-bit approximations differ between CPU makers anyway. SSE2 on xmm runs the MMX helpers on both 64-bit halves (unpack and pack cross the halves), plus 128-bit moves, byte shifts, `pshufd`/`pshuflw`/`pshufhw` and dword/double conversions. SSE2 double-precision arithmetic isn't translated (ProStreet has none).
 - **x87:** 8 `double` registers with TOP, status and control words. Precision control 00 rounds to `float`, like the original under Direct3D 9. Rounding control applies to `fist*`/`frndint`. Compares set C0/C2/C3, and `fnstsw ax` includes TOP. Invalid operations produce x87's *negative* default NaN. `fld/fstp tbyte` converts 80-bit ↔ double.
 
 ## Results (2026-10-18)

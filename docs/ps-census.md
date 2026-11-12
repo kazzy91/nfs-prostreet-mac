@@ -35,8 +35,17 @@ MW's speed.exe has almost no SSE. ProStreet, built with VS2005, uses **SSE scala
 is 36,818 sites). That is the main new translator work in Phase 3. The translator check is "would `recomp.py`
 translate it": a function with a trap still compiles, but it dies at run time if it reaches the trap.
 
-**Update (Phase 3, 2026-11-12):** SSE single precision and `fcomi`/`fucomi` are translated now. `build_game.py`'s
-report: 818 traps left in 31 functions (SSE2 in 19, the "other" row in 12); 35,255 functions are trap-free.
+**Update (Phase 3, 2026-11-12):** everything below is translated now: SSE, SSE2, `fcomi`/`fucomi`, `bswap`,
+`bsr`, `jcxz`, `rep ret`, `cmpxchg8b` and the segment-register reads. The 5 calls to unknown targets were function
+starts Ghidra missed (four constructors reached from switch cases, an import thunk). The manifest tool now finds them
+and two more, and it no longer takes int3 padding that a data pointer reaches as a start (48 such "functions" gone):
+35,247 starts. `build_game.py`'s report: **0 traps**. The 2 stubs (`007D9930`, `008D0DA0`) are data
+tables inside `.text` (two words, then a pointer to `00950978`), reached only by data pointers and never called.
+
+**Locked instructions:** unlike MW, ProStreet has lock-prefixed instructions (`lock cmpxchg8b` in EA's thread
+library at `008BE2F0`–`008BF830`, plus 28 `lock xadd` and 8 `lock cmpxchg`). The translation is not atomic, which is correct
+because guest threads run one at a time under `threads.c`'s global guest lock. A spin loop that never reaches an
+import would never hand over, though. Check this in Phase 5.
 
 ### Untranslatable instructions, grouped by what Phase 3 must add (as first counted)
 

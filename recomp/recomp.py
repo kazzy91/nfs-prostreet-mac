@@ -54,6 +54,8 @@ POSITIONAL_MODE_READS = {
 # stereo 008C5D22, quad 008C5D2E, six 008C5D3A). Explicit 3D pans are untouched.
 POSITIONAL_DEFAULT_STORES = {0x81C056, 0x81CEE9, 0x81CFB0, 0x821B83, 0x823B6B}
 
+# Segment selectors a 32-bit Windows process sees (read-only here; flat model, FS through c->fs_base)
+SEGMENT_SELECTORS = {"cs": 0x1B, "ss": 0x23, "ds": 0x23, "es": 0x23, "fs": 0x3B, "gs": 0x00}
 REG32 = {"eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"}
 REG16 = {"ax": "eax", "cx": "ecx", "dx": "edx", "bx": "ebx", "sp": "esp", "bp": "ebp", "si": "esi", "di": "edi"}
 REG8L = {"al": "eax", "cl": "ecx", "dl": "edx", "bl": "ebx"}
@@ -86,6 +88,10 @@ SSE_OPS = ({k + s for k in list(SSE_ARITH) + list(SSE_UNARY) for s in ("ss", "ps
            {"movss", "movaps", "movups", "movntps", "movlps", "movhps", "movlhps", "movhlps", "comiss", "ucomiss", "shufps",
             "unpcklps", "unpckhps", "cvttss2si", "cvtss2si", "cvtsi2ss", "cvtpi2ps", "cvtps2pi", "cvttps2pi", "movmskps",
             "movntq"})
+# SSE2 forms that aren't MMX mnemonics on xmm (those go through mmx() -> sse2()).
+SSE2_OPS = {"movdqa", "movdqu", "movapd", "movupd", "punpcklqdq", "punpckhqdq", "psrldq", "pslldq", "pshufd", "pshuflw",
+            "pshufhw", "cvtdq2ps", "cvtps2dq", "cvttps2dq", "cvttsd2si", "cvtsd2si", "movdq2q", "movq2dq"}
+MMX_SHIFTS = {"psllw", "psrlw", "psraw", "pslld", "psrld", "psrad", "psllq", "psrlq"}
 
 
 # Flags for compiling translated code (build_all.py, difftest.py). Translated functions take `Cpu *restrict c`, so
@@ -202,6 +208,8 @@ class Recompiler:
             return f"(uint8_t)c->{REG8L[r]}"
         if r in REG8H:
             return f"(uint8_t)(c->{REG8H[r]} >> 8)"
+        if r in SEGMENT_SELECTORS:                           # e.g. __report_gsfailure saving a CONTEXT
+            return f"(uint16_t)0x{SEGMENT_SELECTORS[r]:X}u"
         raise Unsupported(f"reg {r}")
 
     def reg_write(self, r, v):
@@ -339,7 +347,7 @@ class Recompiler:
                     else:
                         self.tables[i.address] = tab
                         work.extend(t for t in set(tab.values()) if t == addr or t not in self.functions)
-                if m in ("ret", "jmp", "hlt", "ud2") or m.startswith("ret"):
+                if m in ("ret", "jmp", "hlt", "ud2", "repz ret", "rep ret") or m.startswith("ret"):
                     break
                 nxt = pc + i.size
                 if m == "int3" and (self.pe.read(nxt, 1) == b"\xCC" or (nxt >= limit if not self.calls else
@@ -598,6 +606,18 @@ class Recompiler:
             a, b = self.rd(i, ops[0]), self.rd(i, ops[1])
             return [f"{{ {T} a = {a}, b = {b}; {T} r = ({T})(a + b); cf = r < a; of = (((a ^ r) & (b ^ r)) >> {BITS[s_] - 1}) & 1; "
                     f"af = ((a ^ b ^ r) >> 4) & 1; {self.szp('r', s_)} {self.wr(i, ops[1], 'a')} {self.wr(i, ops[0], 'r')} }}"]
+        if m in ("lock cmpxchg8b", "cmpxchg8b"):
+            # Not atomic, like every lock-prefixed instruction here: guest threads run one at a time (threads.c GIL)
+            a = self.ea(i, ops[0])
+            return [f"{{ uint32_t ad = {a}; uint64_t d = M64(ad); zf = d == ((uint64_t)c->edx << 32 | c->eax); "
+                    f"if (zf) M64(ad) = (uint64_t)c->ecx << 32 | c->ebx; else {{ c->eax = (uint32_t)d; c->edx = (uint32_t)(d >> 32); }} }}"]
+        if m == "bswap":
+            return [self.wr(i, ops[0], f"__builtin_bswap32({self.rd(i, ops[0], 4)})")]
+        if m in ("bsr", "bsf") and ops[0].size in (2, 4):
+            # zero source: ZF=1 and the destination unchanged (what Intel and AMD CPUs do); CF/OF/SF/AF/PF undefined
+            s_ = ops[0].size
+            idx = "31 - __builtin_clz((uint32_t)v)" if m == "bsr" else "__builtin_ctz((uint32_t)v)"
+            return [f"{{ {CTYPE[s_]} v = {self.rd(i, ops[1], s_)}; zf = v == 0; if (v) {{ {self.wr(i, ops[0], idx)} }} }}"]
         if m in ("lock cmpxchg", "cmpxchg"):
             if ops[0].size != 4:
                 raise Unsupported("cmpxchg8/16")
@@ -763,10 +783,10 @@ class Recompiler:
                 raise Unsupported(m + " out of function")
             cond = {"loop": "c->ecx", "loope": "c->ecx && zf", "loopne": "c->ecx && !zf"}[m]
             return [f"c->ecx--; if ({cond}) goto L_{t:08X};"]
-        if m == "jecxz":
+        if m in ("jecxz", "jcxz"):
             if ops[0].imm not in self.seen:
-                raise Unsupported("jecxz out of function")
-            return [f"if (c->ecx == 0) goto L_{ops[0].imm:08X};"]
+                raise Unsupported(m + " out of function")
+            return [f"if ({'c->ecx' if m == 'jecxz' else '(uint16_t)c->ecx'} == 0) goto L_{ops[0].imm:08X};"]
         if m.startswith("j") and m[1:] in COND:
             t = ops[0].imm
             if not (t in self.seen and (t == fstart or t not in self.functions)):
@@ -793,11 +813,13 @@ class Recompiler:
                 return [f"{push} host_import(c, 0x{op.mem.disp & 0xFFFFFFFF:08X}u); /* {imp} */"]
             # the target operand is read before the return address is pushed (matters for [esp+n])
             return [f"{{ uint32_t t = {self.rd(i, op, 4)}; {push} dispatch(c, t); }}"]
-        if m == "ret":
+        if m in ("ret", "repz ret", "rep ret"):              # rep ret: AMD's branch-predictor idiom, a plain ret
             n = ops[0].imm if ops else 0
             return [f"ABI_CHECK(0x{fstart:08X}u); c->esp += {4 + n}; return;"]
         if m in SSE_OPS:
             return self.sse(i, m)
+        if m in SSE2_OPS:
+            return self.sse2(i, m)
         if m in MMX_OPS or m in ("movq", "movd", "emms", "pextrw", "pinsrw", "pmovmskb", "pshufw"):
             return self.mmx(i, m)
         if m.startswith("f"):
@@ -899,6 +921,78 @@ class Recompiler:
             return [self.wr(i, ops[0], f"sse_movmsk({self.xreg(i, ops[1])})")]
         raise Unsupported(m)
 
+    def sse2(self, i, m):
+        """SSE2 on xmm: the MMX integer operations on both 64-bit halves (runtime.h's mmx_* helpers), plus the 128-bit
+        moves, shuffles and dword/double conversions ProStreet uses."""
+        ops = i.operands
+        D = self.xreg(i, ops[0]) if self.is_xmm(i, ops[0]) else None
+        if m in ("movdqa", "movdqu", "movapd", "movupd"):
+            if ops[0].type == CS_OP_MEM:
+                return [f"XST({self.ea(i, ops[0])}, {self.xreg(i, ops[1])});"]
+            return [f"{D} = {self.x128(i, ops[1])};"]
+        if m == "movq":
+            if ops[0].type == CS_OP_MEM:
+                return [f"M64({self.ea(i, ops[0])}) = {self.xreg(i, ops[1])}.q[0];"]
+            src = f"{self.xreg(i, ops[1])}.q[0]" if ops[1].type == CS_OP_REG else f"M64({self.ea(i, ops[1])})"
+            return [f"{{ uint64_t v = {src}; {D}.q[0] = v; {D}.q[1] = 0; }}"]
+        if m == "movd":
+            if D:
+                return [f"{{ uint32_t v = {self.rd(i, ops[1], 4)}; {D}.q[1] = 0; {D}.q[0] = v; }}"]
+            return [self.wr(i, ops[0], f"{self.xreg(i, ops[1])}.u[0]")]
+        if m == "movdq2q":
+            return [f"c->mm[{i.reg_name(ops[0].reg)[2]}] = {self.xreg(i, ops[1])}.q[0];"]
+        if m == "movq2dq":
+            return [f"{D}.q[0] = c->mm[{i.reg_name(ops[1].reg)[2]}]; {D}.q[1] = 0;"]
+        if m in ("punpcklqdq", "punpckhqdq"):
+            h = 0 if m == "punpcklqdq" else 1
+            return [f"{{ Xmm d = {D}, s = {self.x128(i, ops[1])}; {D}.q[0] = d.q[{h}]; {D}.q[1] = s.q[{h}]; }}"]
+        if m in ("psrldq", "pslldq"):
+            k = ops[1].imm
+            if k > 15:
+                return [f"{D}.q[0] = {D}.q[1] = 0;"]
+            if m == "psrldq":
+                return [f"{{ Xmm d = {D}, r = {{0}}; memcpy(r.b, d.b + {k}, {16 - k}); {D} = r; }}"]
+            return [f"{{ Xmm d = {D}, r = {{0}}; memcpy(r.b + {k}, d.b, {16 - k}); {D} = r; }}"]
+        if m == "pshufd":
+            k = ops[2].imm
+            return [f"{{ Xmm s = {self.x128(i, ops[1])}; " + " ".join(f"{D}.u[{j}] = s.u[{k >> 2 * j & 3}];" for j in range(4)) + " }"]
+        if m in ("pshuflw", "pshufhw"):
+            k, base = ops[2].imm, 0 if m == "pshuflw" else 4
+            return [f"{{ Xmm s = {self.x128(i, ops[1])}; {D} = s; " +
+                    " ".join(f"{D}.w[{base + j}] = s.w[{base + (k >> 2 * j & 3)}];" for j in range(4)) + " }"]
+        if m == "cvtdq2ps":
+            return [f"{{ Xmm s = {self.x128(i, ops[1])}; for (int k = 0; k < 4; k++) {D}.f[k] = (float)s.i[k]; }}"]
+        if m in ("cvtps2dq", "cvttps2dq"):
+            cv = "sse_cvtt(s.f[k])" if m == "cvttps2dq" else "sse_cvt(s.f[k], c->mxcsr)"
+            return [f"{{ Xmm s = {self.x128(i, ops[1])}; for (int k = 0; k < 4; k++) {D}.i[k] = {cv}; }}"]
+        if m in ("cvttsd2si", "cvtsd2si"):
+            src = f"{self.xreg(i, ops[1])}.d[0]" if ops[1].type == CS_OP_REG else f"MF64({self.ea(i, ops[1])})"
+            f = f"sse_cvttsd({src})" if m == "cvttsd2si" else f"sse_cvtsd({src}, c->mxcsr)"
+            return [self.wr(i, ops[0], f"(uint32_t){f}")]
+        if m == "pmovmskb":
+            x = self.xreg(i, ops[1])
+            return [self.wr(i, ops[0], f"(mmx_pmovmskb({x}.q[0]) | mmx_pmovmskb({x}.q[1]) << 8)")]
+        if m in ("pextrw", "pinsrw"):
+            k = ops[2].imm & 7
+            if m == "pextrw":
+                return [self.wr(i, ops[0], f"(uint32_t){self.xreg(i, ops[1])}.w[{k}]")]
+            return [f"{D}.w[{k}] = (uint16_t){self.rd(i, ops[1], 4 if ops[1].type == CS_OP_REG else 2)};"]
+        if m not in MMX_OPS:
+            raise Unsupported("sse2 " + m)
+        if m in MMX_SHIFTS:
+            cnt = f"(uint64_t)0x{ops[1].imm & 0xFF:X}u" if ops[1].type == CS_OP_IMM else "s.q[0]"
+            src = "" if ops[1].type == CS_OP_IMM else f" Xmm s = {self.x128(i, ops[1])};"
+            return [f"{{{src} uint64_t k = {cnt}; {D}.q[0] = mmx_{m}({D}.q[0], k); {D}.q[1] = mmx_{m}({D}.q[1], k); }}"]
+        if m.startswith("punpckl") or m.startswith("punpckh"):
+            # 128-bit unpack: the low (or high) qwords of both, interleaved; MMX's low/high unpacks give each half
+            h, n = (0 if m.startswith("punpckl") else 1), m[7:]
+            return [f"{{ Xmm d = {D}, s = {self.x128(i, ops[1])}; {D}.q[0] = mmx_punpckl{n}(d.q[{h}], s.q[{h}]); "
+                    f"{D}.q[1] = mmx_punpckh{n}(d.q[{h}], s.q[{h}]); }}"]
+        if m.startswith("pack"):
+            # 128-bit pack: the destination's words/dwords saturate into the low qword, the source's into the high
+            return [f"{{ Xmm d = {D}, s = {self.x128(i, ops[1])}; {D}.q[0] = mmx_{m}(d.q[0], d.q[1]); {D}.q[1] = mmx_{m}(s.q[0], s.q[1]); }}"]
+        return [f"{{ Xmm d = {D}, s = {self.x128(i, ops[1])}; {D}.q[0] = mmx_{m}(d.q[0], s.q[0]); {D}.q[1] = mmx_{m}(d.q[1], s.q[1]); }}"]
+
     # ---------- MMX ----------
     def mmx_op(self, i, op, size=8):
         if op.type == CS_OP_REG:
@@ -917,7 +1011,7 @@ class Recompiler:
     def mmx(self, i, m):
         ops = i.operands
         if any(op.type == CS_OP_REG and i.reg_name(op.reg).startswith("xmm") for op in ops):
-            raise Unsupported("sse2 " + m)
+            return self.sse2(i, m)
         if m == "emms":
             return []
         if m == "movq":

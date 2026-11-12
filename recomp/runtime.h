@@ -353,6 +353,19 @@ static inline int32_t sse_cvt(float f, uint32_t mxcsr) {
     }
     return sse_cvtt(f);
 }
+// double -> int32 (SSE2 cvtsd2si/cvttsd2si): the same indefinite and rounding rules
+static inline int32_t sse_cvttsd(double f) {
+    return (f != f || f >= 2147483648.0 || f <= -2147483649.0) ? INT32_MIN : (int32_t)f;
+}
+static inline int32_t sse_cvtsd(double f, uint32_t mxcsr) {
+    switch ((mxcsr >> 13) & 3) {
+    case 1: f = __builtin_floor(f); break;
+    case 2: f = __builtin_ceil(f); break;
+    case 3: f = __builtin_trunc(f); break;
+    default: f = __builtin_roundeven(f); break;
+    }
+    return sse_cvttsd(f);
+}
 static inline uint32_t sse_movmsk(Xmm x) { return (x.u[0] >> 31) | (x.u[1] >> 31) << 1 | (x.u[2] >> 31) << 2 | (x.u[3] >> 31) << 3; }
 
 static inline uint32_t mmx_pmovmskb(uint64_t x) { uint32_t m = 0; for (int i = 0; i < 8; ++i) m |= (uint32_t)(x >> (8 * i + 7) & 1) << i; return m; }

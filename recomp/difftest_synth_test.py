@@ -7,7 +7,9 @@ under Unicorn on random states. Pass: all cases translate, and none fails, crash
 (the documented AUDIT_XFAIL entries are reported, not counted). Without MW's speed.exe and developer emulator the run
 uses difftest's stand-in image and recomp/synth_emu.py.
 Check of the check (by hand, 2026-11-10): with runtime.h's parity8 inverted in a scratch copy, 48 of 375 cases fail.
-Last run (2026-11-12, with SSE and fcomi/fucomi): 517 of 517 translate; 516 pass, 1 expected-fail, 0 fail -> exit 0.
+Last run (2026-11-12, with SSE, SSE2, fcomi/fucomi, bswap/bsr/bsf, cmpxchg8b): 669 of 669 translate; 668 pass,
+1 expected-fail, 0 fail -> exit 0. SSE2 check: with the 128-bit pack/unpack done per half, 12 of 203 xmm cases fail;
+with psrldq off by a byte, 4 of 16 fail.
 Check of the SSE cases: with the default NaN made ARM's 0x7FC00000, 12 of 132 SSE cases fail; with fcompi/fucompi
 not popping, 5 of 17 compare cases fail.
 """
