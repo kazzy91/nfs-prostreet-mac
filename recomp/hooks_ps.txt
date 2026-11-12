@@ -5,3 +5,4 @@
 # address   owner: function
 
 007B81A0    ps_boot.c: FEDemoBootFlowStateManager next screen (DEMO_MUSIC_LEGAL never ends; BOOT_SKIPINTRO)
+006B5000    ps_render_sync.c: render thread command replay (yields the GIL while it waits for the main thread)

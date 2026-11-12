@@ -670,7 +670,7 @@ __attribute__((weak)) int private_cars_backup_before_write(const char *destinati
 static int profile_write_denied(const char *path) {
     return !private_cars_save_allowed() && (file_is_save(path) || !strcmp(path, userdata_dir()));
 }
-static uint32_t file_open(const char *win, const char *host, uint32_t access, uint32_t share, uint32_t disp, uint32_t flags) {
+static uint32_t file_open_impl(const char *win, const char *host, uint32_t access, uint32_t share, uint32_t disp, uint32_t flags) {
     int k = 1, fd = -1, fresh = 0, fl = file_flags(access, disp);
 #ifdef NFS_GAME_PS
     char wpath[4096];
@@ -837,6 +837,20 @@ static int file_close(uint32_t h) {
 // The same paths, handles and save protection as CreateFileA & co.: Win32 handles from file_open, case-insensitive
 // resolve(). Results follow the Win32 calls: 0xFFFFFFFF / -1 on failure with last_error set.
 int host_resolve(const char *win, char *out, size_t n) { return resolve(win, out, n); }
+// BOOT_FILES=1: one line per file open (game path, host path or why it failed), cheap enough for whole runs
+// (BOOT_TRACE logs every import and is too slow to reach a race load).
+static uint32_t file_open(const char *win, const char *host, uint32_t access, uint32_t share, uint32_t disp, uint32_t flags) {
+    static int log = -1;
+    if (log < 0) log = getenv("BOOT_FILES") && atoi(getenv("BOOT_FILES"));
+    uint32_t h = file_open_impl(win, host, access, share, disp, flags);
+    if (log) {
+        int e = errno;
+        fprintf(stderr, "file: %s %s -> %s\n", (access & 0x40000000u) ? "write" : "read", win,
+                h != 0xFFFFFFFFu ? host : strerror(e));
+        errno = e;
+    }
+    return h;
+}
 uint32_t host_file_open(const char *win, uint32_t access, uint32_t share, uint32_t disp) {
     char host[4096];
     resolve(win, host, sizeof host);

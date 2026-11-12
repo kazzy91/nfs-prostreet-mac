@@ -175,9 +175,16 @@ Status (2026-11-12): frame pacing for ProStreet (`runtime/ps_pacing.c`): Present
 time); measured 300 frames per 5.0 s. The stub list is committed (`runtime/ps_stubs.txt`, regenerate with
 `runtime/gen_ps_stubs.py`). Return on the demo's event screen starts the race load: `_setjmp3`/`longjmp` are in the
 CRT shim (`runtime/msvcr.c`), and the translator's Lua protected-frame patch is per game (`Recompiler.lua_protected_frame`:
-MW `006069C0`/`006069E8`, ProStreet `006C3E60`/`006C3EAB`, same guest code), resumed by `boot.c` `host_lua_resume`. The
-load now stays on the animated LOADING screen past 40 s: the main loop runs, a worker thread (`0085C630`) waits in
-`008B63F0` (open). Next: why the load doesn't finish, menus and options, why DEMO_MUSIC_LEGAL never ends.
+MW `006069C0`/`006069E8`, ProStreet `006C3E60`/`006C3EAB`, same guest code), resumed by `boot.c` `host_lua_resume`.
+**The race load completes** (2026-11-12) and the in-race START RACE menu shows over the track at 60 fps, with two fixes:
+- **Data must be the demo's own** (the demo exe hard-codes offsets into its NIS sound bank `SOUND/NIs/ps_nis_pc_en.*`,
+  which differs from retail's). On retail data the race-intro NIS (`HubCrowd08HD`) re-requested its audio stream every
+  frame and the load stayed on LOADING (game flow `WaitForSimulation`, sim load stage 10, NIS phase 2). The demo's
+  installer data works; `sound\NISRevData\*.bin` is missing in both and is optional.
+- The render thread's command replay loop (004AFBC0 -> `006B5000`) waits for the main thread without making an import,
+  so it held the GIL forever: hook `006B5000` (`runtime/ps_render_sync.c`) offers the GIL when its batch is empty.
+`BOOT_FILES=1` logs every file open (game path -> host path or the error). Open: the 3D world renders as exploded
+geometry (spikes from the camera: vertex data or shader constants), why DEMO_MUSIC_LEGAL never ends, menus/options.
 - Front end renders correctly: ProStreet's shaders through `host/shaders`, the new d3dx9_34 functions, missing D3D9
   paths (`ColorFill`, `UpdateSurface` if used; `GetRenderTargetData` is implemented but untested on a real frame).
 - Keyboard/mouse via DirectInput, then controllers. DirectSound audio and music. Profiles/saves in `USERDATA`.
