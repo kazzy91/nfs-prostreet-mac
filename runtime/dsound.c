@@ -108,6 +108,17 @@ static void wd_op(const DsObj *b, unsigned op, uint32_t off, uint32_t bytes, DsR
 }
 static double wd_test_after = -1;     // NFS_TEST_AUDIOLOOP seconds, -1 off
 static uint64_t wd_start;
+// MW guest state this file reads (pause request, sim state, game flow, Snd's worker). ProStreet's aren't mapped yet (Phase 5/6): in the ProStreet
+// build they read as running and not paused, and the Snd-specific diagnostics are compiled out.
+#ifdef NFS_GAME_PS
+#define GAME_PAUSE_REQUEST() 0u
+#define GAME_SIM_STATE() 0u
+#define GAME_FLOW() 0u
+#else
+#define GAME_PAUSE_REQUEST() M32(0x0091CAE4u)                                       // FEManager::mPauseRequest
+#define GAME_SIM_STATE() (M32(0x009885E0u) ? M32(M32(0x009885E0u) + 0x2Cu) : 0u)   // Sim::GetState
+#define GAME_FLOW() M32(0x00925E90u)                                                 // TheGameFlowManager state
+#endif
 static int wd_test_block(const DsObj *b) {
     static int parsed;
     if (!parsed) { const char *e = getenv("NFS_TEST_AUDIOLOOP"); wd_test_after = e ? atof(e) : -1; parsed = 1; }
@@ -123,15 +134,21 @@ static void wd_snapshot(DsObj *hit, uint64_t now, double quiet, double cycles) {
     char path[1300] = "";
     FILE *f = NULL;
     if (dir && *dir) { snprintf(path, sizeof path, "%s/audio_loop_%u.txt", dir, wd_fired); f = fopen(path, "w"); }
+#ifdef NFS_GAME_PS
+    uint32_t tid = 0, state = GAME_SIM_STATE();
+#else
     uint32_t tid = M32(0x009C22ECu), sys = M32(0x009885E0u), state = sys ? M32(sys + 0x2C) : 0;
+#endif
     char wait[160] = "";
     if (tid) threads_wait_desc(tid, wait, sizeof wait);
     if (f) {
         fprintf(f, "Audio-loop watchdog snapshot %u: buffer %08X cycled %.1f buffer lengths over %.2f s with no new Lock/Unlock write\n",
                 wd_fired, hit->guest, cycles, quiet);
+#ifndef NFS_GAME_PS
         fprintf(f, "game flow %u, pause %d, sim state %u, Snd worker thread %u run %u/%u clock %u stuck %u\n  worker wait: %s\n",
                 M32(0x00925E90u), (int32_t)M32(0x0091CAE4u), state, tid, M8(0x009C2010u), M8(0x009C2011u), M32(0x009C2294u),
                 M32(0x009C229Cu), *wait ? wait : "(none recorded)");
+#endif
         fprintf(f, "\nwatched stream buffers (guest handle, bytes, host status, play/write cursor, Unlocks, last Unlock age s, quiet s):\n");
         for (unsigned i = 0; i < 8; ++i) {
             DsObj *b = wd_list[i];
@@ -169,7 +186,7 @@ void dsound_watchdog_tick(void) {
     if (now - last < 250000000ull) return;
     last = now;
     ++wd_checks;
-    uint32_t paused = M32(0x0091CAE4u);
+    uint32_t paused = GAME_PAUSE_REQUEST();
     for (unsigned i = 0; i < 8; ++i) {
         DsObj *b = wd_list[i];
         if (!b) continue;
@@ -205,6 +222,9 @@ static void wd_watch(DsObj *b) {
 // Also logs on pause/state changes so a short menu visit is visible between the one-second snapshots.
 void dsound_diag_tick(void) {
     if (!diag_on) return;
+#ifdef NFS_GAME_PS
+    return;                               // MW Snd internals below
+#endif
     static uint64_t last;
     static uint32_t last_pause = ~0u, last_state = ~0u;
     uint64_t now = host_ticks();
@@ -348,10 +368,10 @@ static int d_Initialize(Cpu *c) { RET((uint32_t)DSERR_ALREADYINITIALIZED, 2); }
 static int b_GetCaps(Cpu *c) { RET((uint32_t)ds_buffer_get_caps(THIS->buf, G + arg(c, 1)), 2); }
 static int b_GetCurrentPosition(Cpu *c) {      // (this, play*, write*)
     DsObj *b = THIS;
-    uint32_t sys = M32(0x009885E0u), sim = sys ? M32(sys + 0x2C) : 0;
+    uint32_t sim = GAME_SIM_STATE();
     // Guest state is read under the guest lock, never by the host mixer. Only the startup front end is eligible;
     // no delayed reopen during an in-game pause/load or after Snd's later device re-creation.
-    ds_device_launch_reopen_tick(b->dev, M32(0x0091CAE4u) != 0 || sim == 4 || M32(0x00925E90u) > 3);
+    ds_device_launch_reopen_tick(b->dev, GAME_PAUSE_REQUEST() != 0 || sim == 4 || GAME_FLOW() > 3);
     uint32_t p = 0, w = 0;
     DsResult r = ds_buffer_get_current_position(b->buf, &p, &w);
     if (arg(c, 1)) M32(arg(c, 1)) = p;
@@ -528,6 +548,7 @@ DsDevice *dsound_current_device(void) {
 // to one 6-channel buffer (FL FR C LFE BL BR) and the host folds down if the output isn't 5.1.
 // NFS_SND_MODE=game keeps the game's own choice; NFS_SND_MODE=<n> forces mode n.
 void f_0081B4AC_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_0081B4AC(Cpu *c) {
     static int force = -2;
     if (force == -2) {
@@ -545,6 +566,7 @@ void f_0081B4AC(Cpu *c) {
     f_0081B4AC_orig(c);
     if (diag_on) diag_event("Snd output mode %u -> %X", want, c->eax);
 }
+#endif
 
 // The overlay's audio line: output mode name, live (1) / null sink (0) / waiting for a device (-1), underruns.
 int dsound_output_info(const char **mode, int *live, uint64_t *underruns) {

@@ -588,10 +588,12 @@ void first_run_settings(Cpu *c, const char *where) {     // also from widescreen
             M32(FSAA_LEVEL), M32(RES_INDEX), M32(SHADOW_DETAIL));
 }
 void f_006C1990_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_006C1990(Cpu *c) {                      // the video settings' hardware detection (default settings)
     f_006C1990_orig(c);
     first_run_settings(c, "video defaults");
 }
+#endif
 
 static int d_CreateDevice(Cpu *c) {            // (this, adapter, type, hFocusWindow, behavior, pp*, ppDevice)
     envcube_configure();
@@ -710,6 +712,7 @@ static int v_Present(Cpu *c) {
     // created during loading (PVehicle at SetStartupRace, ~frame 100), BeginGameplay comes after loading, so the AI's
     // reload now always precedes the NIS (the order of every good run the refs were taken from); a car that only appears
     // with a NIS already loaded waits for the NIS to end.
+#ifndef NFS_GAME_PS   // MW test automation (autodrive popups, BOOT_PURSUIT): MW addresses and guest calls
     if (!hold_still) autodrive_players(c, autodrive);
     // Result popups under BOOT_AUTODRIVE (README, "Into free roam"): the AI doesn't press Continue. When the FEng package
     // that has control (the one cFEng::FindPackageWithControl, 00516A90, returns) is a PostRace_* screen (Pursuit,
@@ -766,6 +769,7 @@ static int v_Present(Cpu *c) {
             if (diag_on) diag_event("pursuit started at heat %.1f", pursuit_heat);
         }
     }
+#endif
     void pacing_present(void);
     pacing_present();                                       // one frame per sim tick (pacing.c)
     gil_yield(c);

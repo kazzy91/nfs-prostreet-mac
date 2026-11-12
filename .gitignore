@@ -85,3 +85,5 @@ dist/
 # Test/build by-products: tables generated from the player's files (tools/gen_tables.py) and the offline tests' Metal scratch
 runtime/gen/
 .metal-cache/
+# FFmpeg source archive, unpacked source and static build (media/build_ffmpeg.sh); a pinned dependency, never committed
+third_party/

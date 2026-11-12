@@ -398,6 +398,9 @@ static void split_sound_worker_reap(uint32_t start) {
     // Both modes leak this exact saved handle: shutdown joins but never closes
     // it, and init overwrites it. Close only that handle, and only for a finished
                                                                   
+#ifdef NFS_GAME_PS
+    (void)start; return;                  // MW split-screen sound worker
+#endif
     if (start != 0x00820BD7u) return;
     uint32_t handle = M32(0x009C22E8u);
     KObj *old = kget(handle);
@@ -620,7 +623,11 @@ int win32_threads(Cpu *c, const char *fn) {
             }
             diag_event("sleep: game thread %s(%u) %.2f ms (wait %.2f, GIL %.2f) frame %llu flow %u from%s", fn, ms,
                        (host_ticks() - t0) / 1e6, (t1 - t0) / 1e6, (host_ticks() - t1) / 1e6,
+#ifdef NFS_GAME_PS
+                       (unsigned long long)perf_nframes, 0u, who);
+#else
                        (unsigned long long)perf_nframes, M32(0x00925E90u), who);
+#endif
         }
         thread_checkpoint(c);
         RET(0, n);

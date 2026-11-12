@@ -174,6 +174,9 @@ void host_lua_protected(Cpu *c, void (*body)(Cpu *), void (*resume)(Cpu *)) {
     lua_protected_frame = frame.prev;
 }
 void host_lua_resume(Cpu *c, uint32_t target) {
+#ifdef NFS_GAME_PS
+    (void)c; (void)target; return;        // MW's Lua protected-call resume address
+#endif
     if (target != 0x006069E8u) return;
     for (LuaProtectedFrame *p = lua_protected_frame; p; p = p->prev) {
         if (p->cpu != c || p->buffer != c->edx || c->esp != M32(p->buffer + 16) + 4) continue;
@@ -189,7 +192,11 @@ void host_cpuid(Cpu *c) {
     // A generic Pentium 4 class CPU: SSE/SSE2, no vendor-specific paths.
     switch (c->eax) {
     case 0: c->eax = 1; c->ebx = 0x756E6547; c->edx = 0x49656E69; c->ecx = 0x6C65746E; break;   // "GenuineIntel"
+#ifdef NFS_GAME_PS
+    case 1: c->eax = 0x00000F29; c->ebx = 0; c->ecx = 0; c->edx = 0x0680FBFF; break;   // + SSE, SSE2 (translated since Phase 3); no FXSR (fxsave isn't)
+#else
     case 1: c->eax = 0x00000F29; c->ebx = 0; c->ecx = 0; c->edx = 0x0080FBFF; break;   // FPU, TSC, CX8, CMOV, MMX (VP6 needs it); no SSE: the translator does MMX only
+#endif
     default: c->eax = c->ebx = c->ecx = c->edx = 0;
     }
 }
@@ -247,7 +254,9 @@ void boot_write_call_counts(FILE *f) {
         if (host_fn_calls_n[i]) fprintf(f, "%12llu  %s\n", (unsigned long long)host_fn_calls_n[i], host_fn_names[i]);
 }
 void dispatch(Cpu *c, uint32_t t) {
+#ifndef NFS_GAME_PS
     if (t == 0x006069E8u) host_lua_resume(c, t);   // Lua protected-error resume (audit 3 #2); dispatch is hot, so test inline
+#endif
     if ((t >= SERVER_BASE && t < SERVER_RESERVED_END) || (t >= SERVER_THUNK_BASE && t < SERVER_THUNK_BASE + 4096)) {
         if (server_dispatch(c, t)) return;
         die("call to unavailable server target %08X", t);
@@ -867,6 +876,7 @@ static void save_task_fixup(uint32_t self, uint32_t state_before, unsigned seq_b
     M32(self + 0x2f4) = 1; M32(self + 0x2f8) = 7;
 }
 // END offline file layer
+#ifndef NFS_GAME_PS                              // MW's career save task hook (ProStreet: none yet)
 void f_007F4F11(Cpu *c) {                       // the career save task (see save_task_fixup)
     uint32_t self = c->ecx, state = M32(self + 0x70);
     unsigned seq = save_fail_seq, commits = save_commit_seq;
@@ -883,6 +893,7 @@ void f_007F4F11(Cpu *c) {                       // the career save task (see sav
     save_task_fixup(self, state, seq);
     save_sidecars_complete(self, state, seq, commits);
 }
+#endif
 // -1 reserves a handle for X360 music or police-radio buffers (no temporary file on disk).
 static X360MusicHandle music_handles[256];
 static X360MusicHandle *handle_music(uint32_t h) {
@@ -1454,6 +1465,9 @@ void host_import(Cpu *c, uint32_t slot) {
 // 1 KiB for split (word 008F7EF4: PC never ran two player cars in one pool); the X360 uses 55,000 KiB for either
 // player count (828FD46C/70). RaceStarter picks 008F7EF4 only for the split race, so the one-player size is untouched.
 static void split_car_pool(void) {
+#ifdef NFS_GAME_PS
+    return;                               // MW globals (SkipFE, car pool, online.cfg, career flags)
+#endif
     if (pad_count() != 2) return;
     const char *t = getenv("NFS_TEST_SPLITPOOL");                                // test only: =pc keeps PC's 1 KiB (before/after proof)
     if ((t && !strcmp(t, "pc")) || M32(0x008F7EF4) != 1) return;               // not the PC table: leave it
@@ -1465,6 +1479,9 @@ static void split_car_pool(void) {
 // (OnlineCfg::ReadConfigFile has no caller), so the globals are written here, before the entry point runs.
 // BOOT_RACE_CAR (default bmwm3gtre46; "race" = the car the race specifies), BOOT_RACE_LAPS (default 10), BOOT_RACE_AI (opponents, default 3).
 static void race_setup(void) {
+#ifdef NFS_GAME_PS
+    return;                               // MW globals (SkipFE, car pool, online.cfg, career flags)
+#endif
     const char *race = getenv("BOOT_RACE");
     if (!race || !*race || !strcmp(race, "0")) return;
     if (!strcmp(race, "1")) race = "15.1.1";
@@ -1513,6 +1530,9 @@ extern int ws2_port_shift;
 extern uint8_t ws2_mac_last;
 extern int ws2_online;
 static void online_setup(void) {
+#ifdef NFS_GAME_PS
+    return;                               // MW globals (SkipFE, car pool, online.cfg, career flags)
+#endif
     const char *role = getenv("BOOT_ONLINE");
     if (!role || !*role || !strcmp(role, "0")) return;
     int host = !strcmp(role, "host");
@@ -1561,6 +1581,9 @@ static void online_setup(void) {
 // cars, through the game's own SkipCareerIntro switch (bytes 0 and 1, as EasterEggs::ActivateEasterEgg sets them).
 // BOOT_UNLOCKALL=1 sets UnlockAllThings (every car, part and Challenge Series event). For scripted playability runs.
 static void dev_switches(void) {
+#ifdef NFS_GAME_PS
+    return;                               // MW globals (SkipFE, car pool, online.cfg, career flags)
+#endif
     if (getenv("BOOT_SKIPINTRO")) { G[0x00926125] = 1; G[0x00926126] = 1; printf("boot: SkipCareerIntro\n"); }
     if (getenv("BOOT_UNLOCKALL")) { G[0x00926124] = 1; printf("boot: UnlockAllThings\n"); }
 }

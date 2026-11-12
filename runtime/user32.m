@@ -804,8 +804,13 @@ static void script_seq(const char *spec, uint64_t real_frame, uint64_t draws) {
     } else if (!strncmp(tok, "sim:", 4)) {
         static float race_sim = -1;
         float now;
+#ifdef NFS_GAME_PS
+        now = 0;
+        if (0) {                                              // ProStreet's sim time and game flow aren't mapped yet
+#else
         memcpy(&now, G + 0x009885D8u, 4);
         if (M32(0x00925E90u) == 6) {                          // racing (GAMEFLOW_STATE)
+#endif
             if (race_sim < 0) race_sim = now;
             if (now - race_sim >= (float)atof(tok + 4)) { ++step; step_start = 0; }
         }
@@ -850,7 +855,9 @@ static void script_seq(const char *spec, uint64_t real_frame, uint64_t draws) {
         }
     } else if (!strncmp(tok, "race:", 5)) {               // race:N: N ticks after the game-flow state first became 6
         static uint64_t race_at;
+#ifndef NFS_GAME_PS
         if (M32(0x00925E90u) == 6 && !race_at) race_at = frame;   // TheGameFlowManager state
+#endif
         if (race_at && frame - race_at >= (uint64_t)atoi(tok + 5)) { if (diag_on) diag_event("script: %s", tok); ++step; step_start = 0; }
     } else if (!strncmp(tok, "wait:", 5)) {
         if (frame - step_start >= (uint64_t)atoi(tok + 5)) { ++step; step_start = 0; }
@@ -1334,6 +1341,9 @@ static void pad_menu_keys(uint32_t keys) {  // menus: FE BUTTON4 / BUTTON0 / STA
 // The FE package that has control (cFEng::FindPackageWithControl 00516A90: cFEng::mInstance -> FEngine, its package
 // list at +0xE4, +8 next, +0x20 has control, +0xC name), or NULL.
 static const char *fe_package_in_control(void) {
+#ifdef NFS_GAME_PS
+    return NULL;                          // ProStreet's front end isn't mapped yet
+#endif
     uint32_t fe = M32(0x0091CADCu) ? M32(M32(0x0091CADCu)) : 0;
     if (!fe || fe == 0xFFFFFF28u) return NULL;
     for (uint32_t p = M32(fe + 0xE4); p; p = M32(p + 8)) if (M32(p + 0x20)) return gptr(M32(p + 0xC));
@@ -1345,12 +1355,18 @@ static const char *fe_package_in_control(void) {
 // controller sends then is what the binding records, and the bindings are used while driving, so the controller gets
 // the driving mapping while the game listens.
 static int pad_remap_listening(void) {
+#ifdef NFS_GAME_PS
+    return 0;
+#endif
     uint32_t io = M32(0x00920DE8u);
     return io && M8(io + 0x183C) && M32(io + 0x1840) == 3;
 }
 // The game's action bindings (GameAction 0091F418: 76 entries of 0x34 bytes: an id, then keyboard primary/secondary
 // and controller primary/secondary, 12 bytes each {type, ?, index}). BOOT_DIAG logs the controller ones on change.
 static void pad_diag_bindings(void) {
+#ifdef NFS_GAME_PS
+    return;
+#endif
     static uint32_t last;
     uint32_t h = 2166136261u;
     for (uint32_t a = 0x0091F418u + 0x1C; a < 0x0091F418u + 76 * 0x34; a += 0x34)
@@ -1369,12 +1385,21 @@ static void pad_diag_bindings(void) {
 static const char *pad_mode = "menus", *pad_ctl;   // the last mapping decision, for the diag pad: lines
 int controltype_passthrough(int idx);
 static void pad_apply_layout(int idx, PadState *st, uint32_t phys) {
+#ifdef NFS_GAME_PS
+    uint32_t sim = 0;   // ProStreet's sim and game flow aren't mapped yet: never "driving"
+    // Driving: racing (game-flow 6), the sim not paused, and no menu package in control (the race results come up
+    // while the sim still runs; the HUD packages are HUD_*).
+    const char *ctl = fe_package_in_control();
+    int menu = ctl && strncasecmp(ctl, "HUD_", 4);
+    int driving = 0;
+#else
     uint32_t sim = M32(SIM_INSTANCE);
     // Driving: racing (game-flow 6), the sim not paused, and no menu package in control (the race results come up
     // while the sim still runs; the HUD packages are HUD_*).
     const char *ctl = fe_package_in_control();
     int menu = ctl && strncasecmp(ctl, "HUD_", 4);
     int driving = M32(GAMEFLOW_STATE) == 6 && !(sim && M32(sim + 0x2C) == 4) && !menu;
+#endif
     int remap = pad_remap_listening();
     // A button held while re-mapping starts (the Cross that picked the field: Accept in menus) or ends (the button
     // just bound) is left out until released, so it is neither bound nor taken as a new menu press.

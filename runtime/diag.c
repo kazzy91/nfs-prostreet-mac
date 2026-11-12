@@ -1108,6 +1108,7 @@ static void nis_residency(Cpu *c, const float pos[3], int *zone, int *loaded, ch
 }
 
 void f_006F51F0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_006F51F0(Cpu *c) {               // NISActivity::Load(kind, scene name, ...)
     // BOOT_NIS=<scene> (test only, inert without it): the race's own "IntroNis.." scene is swapped for the named one,
     // so a scene the plain race route never reaches (Blacklist rivals' IntroNisBL12) can be played and inspected.
@@ -1138,7 +1139,9 @@ void f_006F51F0(Cpu *c) {               // NISActivity::Load(kind, scene name, .
                    nis_activity, M32(nis_activity + 0x39C));
     }
 }
+#endif
 void f_006F5750_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_006F5750(Cpu *c) {               // retains the timeline milestone formerly emitted by the macro
     if (diag_on) {
         diag_timeline("call NISActivity::Play from %08X", M32(c->esp));
@@ -1155,7 +1158,9 @@ void f_006F5750(Cpu *c) {               // retains the timeline milestone former
     }
     f_006F5750_orig(c);
 }
+#endif
 void f_00789870_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00789870(Cpu *c) {               // original rigorous query within 0044B040 only
     NisSample *s = diag_on ? nis_capture : NULL;
     if (!s || M32(c->esp) != 0x0044B0C2u) { f_00789870_orig(c); return; }
@@ -1165,7 +1170,9 @@ void f_00789870(Cpu *c) {               // original rigorous query within 0044B0
     s->ground = (c->eax & 255) != 0;
     s->height = s->ground ? MF32(height) : NAN;
 }
+#endif
 void f_00691110_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00691110(Cpu *c) {               // SuspensionSpline::SetNISPosition(matrix, init, dt)
     NisSample *s = diag_on ? nis_capture : NULL;
     if (!s) { f_00691110_orig(c); return; }
@@ -1184,7 +1191,9 @@ void f_00691110(Cpu *c) {               // SuspensionSpline::SetNISPosition(matr
     uint32_t v = nis_read(c, rb, M32(M32(rb) + 0x24), 0, NULL);
     if (v) s->vy = MF32(v + 4);
 }
+#endif
 void f_0044B040_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_0044B040(Cpu *c) {
     if (!diag_on || !nis_activity || !nis_playing || nis_lines >= 16384 ||
         c->ecx != M32(nis_activity + 0x39C) || M32(nis_activity + 0x2F4) != 5) {
@@ -1230,6 +1239,7 @@ void f_0044B040(Cpu *c) {
     a->last = st; ++a->lines; ++nis_lines;
     a->calls = a->ground_fail = a->init_fail = 0; a->sumdt = 0;
 }
+#endif
 
 // ---------------- timeline: loading and the race start in game time ----------------
 // <dir>/timeline.log: every game event the Event queue fires (FUN_00633EF0: vtable[0] of each queued Event, i.e.
@@ -1274,6 +1284,7 @@ static const char *timeline_name(uint32_t fn, char *buf, size_t n) {
 uint32_t call_guest(Cpu *c, uint32_t fn, int n, const uint32_t *args);
 // The Event queue (cdecl, called after every tick and frame): the same loop as the game's, naming each event.
 void f_00633EF0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00633EF0(Cpu *c) {
     if (!diag_timeline_on()) { f_00633EF0_orig(c); return; }
     const uint32_t one = 1;
@@ -1292,12 +1303,15 @@ void f_00633EF0(Cpu *c) {
     M32(0x00920390u) = M32(0x00920394u) = M32(0x0092038Cu);        // back to gMemoryBuffer
     c->esp += 4;                                                    // ret
 }
+#endif
 // Hermes::Message::Post(UCrc32 channel) (thiscall; the message's kind CRC at +0)
 void f_00654AF0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00654AF0(Cpu *c) {
     if (diag_timeline_on()) diag_timeline("message %08X on %08X (from %08X)", M32(c->ecx), M32(c->esp + 4), M32(c->esp));
     f_00654AF0_orig(c);
 }
+#endif
 // Milestones: logged with their caller.
 #define TIMELINE_HOOK(addr)                                                                                        \
     void f_##addr##_orig(Cpu *c);                                                                                  \
@@ -1310,12 +1324,24 @@ void f_00654AF0(Cpu *c) {
         }                                                                                                          \
         f_##addr##_orig(c);                                                                                        \
     }
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 TIMELINE_HOOK(00567F10)   // Countdown::BeginCountdown
+#endif
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 TIMELINE_HOOK(006EA960)   // NISActivity::SkipOverNIS
+#endif
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 TIMELINE_HOOK(006EF530)   // NISActivity::OnMovieComplete
+#endif
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 TIMELINE_HOOK(00603500)   // GManager::BeginGameplay
+#endif
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 TIMELINE_HOOK(006035F0)   // GManager::PreBeginGameplay
+#endif
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 TIMELINE_HOOK(00654030)   // ResetWorldTime
+#endif
 // Car rendering in BOOT_DIAG_DRAWS frames, written into the frame's draw dump (`car:` lines, before the flush that
 // draws them): every CarRenderInfo::Render (0074E160: view, flags, reflection flag, LOD range, result) and RenderPart
 // (007387E0: the part slot as its offset in the CarRenderInfo, decoded for the body parts table +0xB84 (part x 0x14 +
@@ -1324,6 +1350,7 @@ unsigned diag_car1[4];   // this frame: view-1 CarRenderInfo::Render calls, true
 static inline float car_f32(uint32_t a) { float f; memcpy(&f, G + a, 4); return f; }
 FILE *dump_file(void);
 void f_0074E160_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_0074E160(Cpu *c) {   // thiscall bool Render(view, pos, m, m, m, m, flags, p8, reflection, float, min LOD, max LOD)
     if (!diag_on) { f_0074E160_orig(c); return; }
     DiagCarRender sample;
@@ -1340,7 +1367,9 @@ void f_0074E160(Cpu *c) {   // thiscall bool Render(view, pos, m, m, m, m, flags
     if (vid == 1) { ++diag_car1[0]; diag_car1[1] += c->eax & 1; diag_car1[2] += M32(0x00915F98u) != fail0; }   // frames.log `cars1`
     else if (vid == 4) ++diag_car1[3];
 }
+#endif
 void f_007387E0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_007387E0(Cpu *c) {   // thiscall void RenderPart(view, CarPartModel *, bMatrix4 *, eDynamicLightContext *, flags)
     FILE *df = diag_on ? dump_file() : NULL;
     if (df) {
@@ -1353,8 +1382,10 @@ void f_007387E0(Cpu *c) {   // thiscall void RenderPart(view, CarPartModel *, bM
     }
     f_007387E0_orig(c);
 }
+#endif
 // Countdown::Update (the HUD's 3-2-1, per HUD update): its first call per HUD and every change of its digit (+0x44)
 void f_005679B0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_005679B0(Cpu *c) {
     if (!diag_timeline_on()) { f_005679B0_orig(c); return; }
     static uint32_t last_obj, last_digit;
@@ -1364,6 +1395,7 @@ void f_005679B0(Cpu *c) {
     uint32_t after = M32(self + 0x44);
     if (after != last_digit) { diag_timeline("Countdown::Update digit %d -> %d", (int32_t)last_digit, (int32_t)after); last_digit = after; }
 }
+#endif
 // FEngHud::DetermineHudFeatures (0057CA60, thiscall, arg IPlayer*; hooked in pacing.c, which calls this after it):
 // the HUD's elements (the countdown among them) only update while it returns non-zero. Logs the number of calls per
 // HUD at each change of the result, and while it is 0, which of its conditions fail (bits, in the order it tests
@@ -1406,10 +1438,13 @@ void diag_hud_features(Cpu *c, uint32_t self, uint32_t player, int held) {
         last_lo = lo; last_hi = hi; last_mask = mask;
     }
 }
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 TIMELINE_HOOK(0060E160)   // Game_NotifyCountdownDone (Lua: releases the racers' vehicles)
+#endif
 // WaitForResourceLoadingComplete (the per-frame step, cdecl): steps over 20 ms, with the first delayed callback it
 // ran (DelayedResourceCallbacks 00925688) and the resource list's head (ResourceFileList 009259A4).
 void f_006626B0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_006626B0(Cpu *c) {
     if (!diag_timeline_on()) { f_006626B0_orig(c); return; }
     uint32_t ndelayed = M32(0x0092585Cu), cb = ndelayed ? M32(0x00925688u) : 0, loading = M32(0x00925858u);
@@ -1420,6 +1455,7 @@ void f_006626B0(Cpu *c) {
     if (ms > 20) diag_timeline("WaitForResourceLoadingComplete step %.1f ms (delayed callbacks %u, first %s; loading %u -> %u)", ms,
                                ndelayed, cb ? timeline_name(cb, buf, sizeof buf) : "-", loading, M32(0x00925858u));
 }
+#endif
 
 // RECOMP_ABICHECK builds: a translated function returned with a callee-saved register or esp changed.
 void abi_violation(Cpu *c, uint32_t fn, uint32_t ebx, uint32_t esi, uint32_t edi, uint32_t ebp, uint32_t esp) {
@@ -1450,6 +1486,7 @@ void abi_violation(Cpu *c, uint32_t fn, uint32_t ebx, uint32_t esi, uint32_t edi
 // pointer in eax) lookup, which the FEng text labels go through (FEngSetLanguageHash 00515C00 -> the label callback). Used to find
 // the real label hashes (the LANGUAGES/*.bin offsets don't index the text directly).
 void fe_console_search(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_0056BB80(Cpu *c) {
     static int on = -1;
     static uint32_t seen[8192];
@@ -1470,6 +1507,7 @@ void f_0056BB80(Cpu *c) {
     fputc('\n', f);
     fclose(f);
 }
+#endif
 
 // The game's shared string pool (gSharedStringPool 0090E690: bInitSharedStringPool(0x8000) in InitializeEverything):
 // every bFile, queued file, streaming pack and car pack keeps its name there. bSharedStringPool::Allocate (004615A0,
@@ -1486,6 +1524,7 @@ void sstr_pool_stats(uint32_t *n, uint32_t *peak_n, uint32_t *bytes, uint32_t *p
     *n = M32(SSTR_POOL + 0x34); *peak_n = M32(SSTR_POOL + 0x38);
 }
 void f_004615A0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_004615A0(Cpu *c) {
     static const char *empty = (const char *)-1;
     static unsigned nfail;
@@ -1531,11 +1570,13 @@ void f_004615A0(Cpu *c) {
                 s, nfail, "", n, b, sz, pn, pb);
     if (diag_on) diag_event("bSharedStringPool::Allocate(%.80s) -> NULL (%u strings, %u/%u bytes)", s, n, b, sz);
 }
+#endif
 // bSharedStringPool::Free (004617E0, thiscall (name)): the car packs' names, with the references left (diag only). A
 // name freed while a LoadedSolidPack still points at it reads "" (the race-start hang's empty-name open loop).
 // TEST (local): BOOT_TEST_SHAREDSTR_POISON=1: a string freed to 0 references keeps its length as '~'s (instead of ""),
 // so a later use of the dead name is visible: Allocate logs every "~~~" name with its caller, and opens show it.
 void f_004617E0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_004617E0(Cpu *c) {
     static int poison = -1;
     if (poison < 0) poison = getenv("BOOT_TEST_SHAREDSTR_POISON") != NULL;
@@ -1550,12 +1591,14 @@ void f_004617E0(Cpu *c) {
     if (car) diag_event("sstr free %08X \"%s\" refs %u from %08X", name, copy, M16(name - 2), ra);
     if (poison && in_pool && len && len < end - name && M16(name - 2) == 0) memset(G + name, '~', len);
 }
+#endif
 
 // ---------------- race start placement (one-off diagnostic) ----------------
 // World_DEBUGStartLocation (00733710, cdecl (pos, dir)): QuickGame's start location (startup race's start marker,
 // else GManager's respawn location); GRaceDatabase::SetStartupRace (00600AB0); Game_WarpPlayerToTrigger (00611570);
 // the race-grid placement 0060D820. Startup race = GRaceDatabase::mObj (0091E004) +0x2C.
 void f_00733710_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00733710(Cpu *c) {
     uint32_t pos = arg(c, 0), dir = arg(c, 1);
     f_00733710_orig(c);
@@ -1566,13 +1609,17 @@ void f_00733710(Cpu *c) {
         diag_timeline("racestart: World_DEBUGStartLocation pos %.1f %.1f %.1f", MF32(pos), MF32(pos + 4), MF32(pos + 8));
     }
 }
+#endif
 void f_00600AB0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00600AB0(Cpu *c) {
     if (diag_on) { diag_event("racestart: SetStartupRace %08X (db %08X) from %08X", arg(c, 0), c->ecx, M32(c->esp));
                    diag_timeline("racestart: SetStartupRace %08X", arg(c, 0)); }
     f_00600AB0_orig(c);
 }
+#endif
 void f_00611570_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00611570(Cpu *c) {
     uint32_t t = arg(c, 0);
     if (diag_on) { diag_event("racestart: Game_WarpPlayerToTrigger %08X pos %.1f %.1f %.1f from %08X", t, MF32(t + 0x28), MF32(t + 0x2C), MF32(t + 0x30), M32(c->esp));
@@ -1582,6 +1629,7 @@ void f_00611570(Cpu *c) {
     if (diag_on) diag_event("racestart: Game_WarpPlayerToTrigger done in %.1f ms, %llu frames", (host_ticks() - t0) / 1e6,
                             (unsigned long long)(perf_nframes - f0));
 }
+#endif
 // BOOT_DIAG_WARP=<race sim s>:<x>,<y>,<z>[:dir=<x>,<y>,<z>][:block] (hitch work): warp the player once the race's sim
 // time passes s, as a career event entry does (Game_WarpPlayerToTrigger with a trigger at UMath x,y,z; 00611570 hands
 // trigger+0x34 to the vehicle as its facing, default UMath +x), at the end of a main-loop pass. Free roam only: in a
@@ -1622,27 +1670,34 @@ void diag_warp_pass(Cpu *c) {
     c->esp = esp; c->ecx = ecx;
 }
 void f_0060D820_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_0060D820(Cpu *c) {
     if (diag_on) { diag_event("racestart: grid placement 0060D820 from %08X", M32(c->esp)); diag_timeline("racestart: grid placement 0060D820"); }
     f_0060D820_orig(c);
 }
+#endif
 // The player vehicle: Game_SetPlayerStartPosition (00611670, cdecl (GRuntimeInstance*)); PVehicle::LoadBehaviors
 // (00685240, thiscall (pos, matrix)); PVehicle::SetVehicleOnGround (00685810, thiscall on the IVehicle part (pos, dir),
 // returns success; fails with no rigid body or no behaviours); PVehicle::ReloadBehaviors (006863B0, fastcall);
 // PVehicle::SetAnimating (00686410, thiscall (bool)).
 void f_00611670_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00611670(Cpu *c) {
     if (diag_on) { diag_event("racestart: Game_SetPlayerStartPosition %08X from %08X", arg(c, 0), M32(c->esp)); diag_timeline("racestart: Game_SetPlayerStartPosition"); }
     f_00611670_orig(c);
 }
+#endif
 void f_00685240_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00685240(Cpu *c) {
     uint32_t self = c->ecx, pos = arg(c, 0);
     if (diag_on) { diag_event("racestart: PVehicle::LoadBehaviors %08X pos %.1f %.1f %.1f from %08X", self, MF32(pos), MF32(pos + 4), MF32(pos + 8), M32(c->esp));
                    diag_timeline("racestart: PVehicle::LoadBehaviors %08X pos %.1f %.1f %.1f", self, MF32(pos), MF32(pos + 4), MF32(pos + 8)); }
     f_00685240_orig(c);
 }
+#endif
 void f_00685810_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00685810(Cpu *c) {
     uint32_t self = c->ecx, pos = arg(c, 0), ret = M32(c->esp);
     float p[3] = {MF32(pos), MF32(pos + 4), MF32(pos + 8)};
@@ -1650,16 +1705,21 @@ void f_00685810(Cpu *c) {
     if (diag_on) { diag_event("racestart: PVehicle::SetVehicleOnGround %08X pos %.1f %.1f %.1f -> %u from %08X", self, p[0], p[1], p[2], c->eax & 255, ret);
                    diag_timeline("racestart: SetVehicleOnGround %08X pos %.1f %.1f %.1f -> %u from %08X", self, p[0], p[1], p[2], c->eax & 255, ret); }
 }
+#endif
 void f_006863B0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_006863B0(Cpu *c) {
     if (diag_on) { diag_event("racestart: PVehicle::ReloadBehaviors %08X from %08X", c->ecx, M32(c->esp)); diag_timeline("racestart: ReloadBehaviors %08X", c->ecx); }
     f_006863B0_orig(c);
 }
+#endif
 void f_00686410_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00686410(Cpu *c) {
     if (diag_on) { diag_event("racestart: PVehicle::SetAnimating %08X %u from %08X", c->ecx, arg(c, 0) & 255, M32(c->esp)); diag_timeline("racestart: SetAnimating %08X %u", c->ecx, arg(c, 0) & 255); }
     f_00686410_orig(c);
 }
+#endif
 
 // BOOT_DIAG carpack: the car texture loads (split-screen two-car race load, 2026-10-27). LoadAllTexturesFromPack
 // 0075B7A0 (CarLoader this, pack name, flag) logs the loader's queued-layer count +AC and state +8; InternalLoadStreamingEntry
@@ -1688,17 +1748,22 @@ static void carpool_log(Cpu *c, const char *what) {
                (size - min_free) >> 10, carpool_stat(c, 0x00464050, 7) >> 10, carpool_stat(c, 0x00464080, 7) >> 10);
 }
 void f_00759F00_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00759F00(Cpu *c) {
     if (diag_on) carpool_log(c, M32(c->esp + 4) & 255 ? "RemoveSomething(true)" : "RemoveSomething(false)");
     f_00759F00_orig(c);
 }
+#endif
 void f_0045CD20_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_0045CD20(Cpu *c) {
     uint32_t ra = M32(c->esp);
     if (diag_on && ra >= 0x00759F00u && ra < 0x00759FE0u) diag_event("carpool: EVICTION ASSERT (__break from RemoveSomethingFromCarMemoryPool, ret %08X)", ra);
     f_0045CD20_orig(c);
 }
+#endif
 void f_0075B7A0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_0075B7A0(Cpu *c) {
     if (!diag_on) { f_0075B7A0_orig(c); return; }
     uint32_t self = c->ecx, name = arg(c, 0), flag = arg(c, 1), ac = M32(self + 0xAC);
@@ -1710,7 +1775,9 @@ void f_0075B7A0(Cpu *c) {
     diag_event("carpack: LoadAllTexturesFromPack loader %08X pack %s flag %u state %u layers %u -> %u ret %u",
                self, name ? gptr(name) : "(null)", flag, M32(self + 8), ac, M32(self + 0xAC), c->eax);
 }
+#endif
 void f_00500D80_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00500D80(Cpu *c) {
     if (diag_on) {
         static unsigned n;
@@ -1737,10 +1804,12 @@ void f_00500D80(Cpu *c) {
     }
     f_00500D80_orig(c);
 }
+#endif
 // carpack, second stage: the entry count LoadStreamingEntry 00508560 is asked for (loader; hashes, count, cb, cbarg,
 // pool), and the per-skin texture-hash counts that feed LoadAllTexturesFromPack: LoadedSkin::GetTextureHashes 007528D0
 // (skin; out, max, flag: RideInfo at skin+8) and CarLoader::AllocateSkinLayers 00753060 (hashes, count, out, room, pack).
 void f_00508560_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00508560(Cpu *c) {
     if (diag_on) {
         uint32_t h = arg(c, 0), n = arg(c, 1);
@@ -1750,7 +1819,9 @@ void f_00508560(Cpu *c) {
     }
     f_00508560_orig(c);
 }
+#endif
 void f_007528D0_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_007528D0(Cpu *c) {
     if (!diag_on) { f_007528D0_orig(c); return; }
     uint32_t skin = c->ecx, max = arg(c, 1), flag = arg(c, 2), ri = M32(skin + 8);
@@ -1758,7 +1829,9 @@ void f_007528D0(Cpu *c) {
     diag_event("carpack: GetTextureHashes skin %08X rideinfo %08X cartype %d skin14 %d max %d flag %u -> %d", skin, ri,
                ri ? (int)M32(ri) : -1, (int)M32(skin + 0x14), (int)max, flag, (int)c->eax);
 }
+#endif
 void f_00753060_orig(Cpu *c);
+#ifndef NFS_GAME_PS   // MW hook (MW guest address)
 void f_00753060(Cpu *c) {
     if (!diag_on) { f_00753060_orig(c); return; }
     uint32_t n = arg(c, 1), room = arg(c, 3), nm = arg(c, 4);
@@ -1766,3 +1839,4 @@ void f_00753060(Cpu *c) {
     diag_event("carpack: AllocateSkinLayers count %d room %d pack %s -> %d", (int)n, (int)room, nm ? gptr(nm) : "(null)",
                (int)c->eax);
 }
+#endif

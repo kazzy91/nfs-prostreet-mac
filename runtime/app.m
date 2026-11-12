@@ -25,7 +25,23 @@
 #include "durable.h"
 #include "../host/audio/dsound_host.h"
 
-extern const char speed_exe_sha256[];   // recomp/out/table.c: the speed.exe the game code was translated from
+// The exe the game code was translated from (recomp/out/table.c; ProStreet: recomp/out/ps_demo/table.c, build_game.py)
+#ifdef NFS_GAME_PS
+#define GAME_EXE "nfs.exe"
+#define GAME_CODE "the Need for Speed ProStreet demo release nfs.exe"
+#define EXE_FP_TAG "nfsps-exe-fp-v1\n"
+#define EXE_SHA256 game_exe_sha256
+#define EXE_FINGERPRINT game_exe_fingerprint
+#define EXE_REGION_SHA256 game_exe_region_sha256
+#else
+#define GAME_EXE "speed.exe"
+#define GAME_CODE "the Need for Speed Most Wanted PC v1.3 speed.exe"
+#define EXE_FP_TAG "nfsmw-exe-fp-v1\n"
+#define EXE_SHA256 speed_exe_sha256
+#define EXE_FINGERPRINT speed_exe_fingerprint
+#define EXE_REGION_SHA256 speed_exe_region_sha256
+#endif
+extern const char EXE_SHA256[];
 int app_bundled;
 extern char **environ;
 
@@ -313,9 +329,14 @@ static void log_setup(void) {
 // The supported exe is the PC v1.3 *code*, not one file: SHA-256 over the .text/.rdata/.data bytes and the PE layout
 // the port reads (recomp/exe_fingerprint.py has the definition and why; keep the two in step). The owner's
 // whole-file hash is accepted too.
-extern const char speed_exe_fingerprint[], speed_exe_region_sha256[4][65];
+// ProStreet: the ps_demo profile's regions and tag (recomp/exe_fingerprint.py PROFILES; keep the two in step).
+extern const char EXE_FINGERPRINT[], EXE_REGION_SHA256[4][65];
 static const struct { const char *name; uint32_t rva, size; } fp_regions[3] = {
+#ifdef NFS_GAME_PS
+    {".text", 0x1000, 0x51443B}, {".rdata", 0x516000, 0xD755E}, {".data", 0x5EE000, 0x5BD294}};
+#else
     {".text", 0x1000, 0x48E2A5}, {".rdata", 0x490000, 0x5971D}, {".data", 0x4EA000, 0xDCE10}};
+#endif
 static void hex32(const uint8_t *md, char *out) {
     for (int i = 0; i < 32; ++i) snprintf(out + 2 * i, 3, "%02x", md[i]);
 }
@@ -365,7 +386,7 @@ static int exe_digests(const uint8_t *d, size_t len, char parts[4][65], char fp[
     }
     CC_SHA256_CTX ctx;
     CC_SHA256_Init(&ctx);
-    CC_SHA256_Update(&ctx, "nfsmw-exe-fp-v1\n", 16);
+    CC_SHA256_Update(&ctx, EXE_FP_TAG, 16);
     CC_SHA256_Update(&ctx, all, sizeof all);
     CC_SHA256_Final(md, &ctx);
     hex32(md, fp);
@@ -375,32 +396,32 @@ static int exe_digests(const uint8_t *d, size_t len, char parts[4][65], char fp[
 // 0 when `dir` has a speed.exe with the code the game was translated from; otherwise why not, for the alert.
 static int check_game_dir(const char *dir, char *why, size_t n) {
     char path[1100];
-    snprintf(path, sizeof path, "%s/speed.exe", dir);
+    snprintf(path, sizeof path, "%s/" GAME_EXE, dir);
     struct stat st;
     if (stat(dir, &st) || !S_ISDIR(st.st_mode)) { snprintf(why, n, "The folder %s can't be found.", dir); return 1; }
     FILE *f = fopen(path, "rb");
-    if (!f) { snprintf(why, n, "%s doesn't contain speed.exe.", dir); return 1; }
+    if (!f) { snprintf(why, n, "%s doesn't contain " GAME_EXE ".", dir); return 1; }
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
     uint8_t *d = len > 0 && len < (200l << 20) ? malloc((size_t)len) : NULL;
-    if (!d || fread(d, 1, (size_t)len, f) != (size_t)len) { fclose(f); free(d); snprintf(why, n, "speed.exe in %s can't be read.", dir); return 1; }
+    if (!d || fread(d, 1, (size_t)len, f) != (size_t)len) { fclose(f); free(d); snprintf(why, n, GAME_EXE " in %s can't be read.", dir); return 1; }
     fclose(f);
     uint8_t md[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(d, (CC_LONG)len, md);
     char whole[65], parts[4][65], fp[65];
     hex32(md, whole);
-    if (!strcmp(whole, speed_exe_sha256)) { free(d); return 0; }
+    if (!strcmp(whole, EXE_SHA256)) { free(d); return 0; }
     int ok = exe_digests(d, (size_t)len, parts, fp);
     free(d);
-    if (!ok) { snprintf(why, n, "speed.exe in %s isn't a 32-bit Windows program; this port supports the Need for Speed Most Wanted PC v1.3 speed.exe.", dir); return 1; }
-    if (strcmp(fp, speed_exe_fingerprint)) {
+    if (!ok) { snprintf(why, n, GAME_EXE " in %s isn't a 32-bit Windows program; this port supports " GAME_CODE ".", dir); return 1; }
+    if (strcmp(fp, EXE_FINGERPRINT)) {
         static const char *const names[4] = {"PE layout", ".text", ".rdata", ".data"};
         char bad[200] = "";
         for (int i = 0; i < 4; ++i)
-            if (strcmp(parts[i], speed_exe_region_sha256[i])) snprintf(bad + strlen(bad), sizeof bad - strlen(bad), "%s%s", *bad ? ", " : "", names[i]);
-        snprintf(why, n, "speed.exe in %s: %s differs: a different game version or a protected exe; this port supports "
-                 "the Need for Speed Most Wanted PC v1.3 code.", dir, bad);
+            if (strcmp(parts[i], EXE_REGION_SHA256[i])) snprintf(bad + strlen(bad), sizeof bad - strlen(bad), "%s%s", *bad ? ", " : "", names[i]);
+        snprintf(why, n, GAME_EXE " in %s: %s differs: a different game version or a protected exe; this port supports "
+                 GAME_CODE ".", dir, bad);
         return 1;
     }
     return 0;
@@ -414,7 +435,11 @@ static NSString *pick_folder(void) {
     p.canChooseFiles = NO;
     p.allowsMultipleSelection = NO;
     p.title = @"Choose the Game Folder";
+#ifdef NFS_GAME_PS
+    p.message = @"Choose your Need for Speed ProStreet folder: the one with nfs.exe (EA's demo release build) in it.";
+#else
     p.message = @"Choose your Need for Speed Most Wanted folder: the one with speed.exe (version 1.3) in it.";
+#endif
     p.prompt = @"Choose";
     [NSApp activateIgnoringOtherApps:YES];
     return [p runModal] == NSModalResponseOK ? p.URL.path : nil;

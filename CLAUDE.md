@@ -130,7 +130,14 @@ translator patches into `mw13` and building MW with build_game.py, which needs s
   instruction the census says Phase 3 adds (e.g. SSE2).
 - **Exit:** `out/nfs.a` builds; ≥99 % functions translated; stubs listed; difftests pass on sampled leaves.
 
-### Phase 4: link
+### Phase 4: link ✅ (2026-11-12)
+Status: `runtime/build_ps.sh` links `recomp/out/ps_demo/boot_ps` (arm64) with no undefined symbols, from `nfs.a`, the
+core runtime, the app-shell files without MW addresses, `runtime/imports_ps.c` (`recomp/gen_imports.py`) and 226
+generated "feature off" stubs (`runtime/ps_stubs.m`, `runtime/gen_ps_stubs.py`). `-DNFS_GAME_PS=1` compiles the MW
+hooks and the MW guest-address reads/writes out of the core files; the game-folder check takes `nfs.exe` and the
+`ps_demo` fingerprint (`runtime/app_fingerprint_test.py`); CPUID reports SSE/SSE2. All 332 imports reach
+`host_import`: 311 handled, 21 stop by name. **CRT decision: the native MSVCR80/MSVCP80 shim** (`runtime/msvcr.c`),
+not a translated second module. The demo imports no WSOCK32. Details: `docs/ps-link.md`. MW's `build.sh` unchanged.
 - Regenerate `runtime/imports.c` from `nfs.exe`. Alias WSOCK32 to the WS2 handlers.
 - Build list for ProStreet: core runtime + host layers only, no MW feature files. Strip MW hooks/addresses out of the
   core files (`boot.c`, `d3d9.m`, `render.m`, `user32.m`, `dsound.c`, `threads.c`, `pacing.c`) behind the profile.

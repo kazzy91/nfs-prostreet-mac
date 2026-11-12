@@ -110,6 +110,9 @@ int boot_reg_override(const char *name) {
 // skips) reads the registry again with only the BOOT_REG values answering, so they win over what detection picked.
 static int reg_boot_only;
 void boot_reg_reapply(Cpu *c) {
+#ifdef NFS_GAME_PS
+    (void)c; return;                      // MW's settings loader (FUN_006c1c00)
+#endif
     if (!getenv("BOOT_REG")) return;
     Cpu s = *c;
     reg_boot_only = 1;

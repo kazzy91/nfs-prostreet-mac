@@ -188,6 +188,10 @@ static void envcube_forget(Obj *o) {
     if (d) *d = (EnvCubeState){0};
 }
 static void envcube_configure(void) {
+#ifdef NFS_GAME_PS
+    envcube_sharp = 0;                    // MW's car-reflection cube (its capture-size global 0x008F8FF4): off
+    return;
+#endif
     envcube_sharp = envcube_option(getenv("NFS_CAR_REFLECTION"));
     envcube_broken = diag_on && getenv("NFS_TEST_ENVCUBE_NO_MIPS") != NULL;
     const char *blitmips=getenv("NFS_CUBE_BLITMIPS");

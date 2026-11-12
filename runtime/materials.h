@@ -45,7 +45,7 @@ typedef struct MatConsts { float k[12][4]; } MatConsts;   // car paint reads all
 "    return float4((specular * f0 + environment * f) / a, a);\n" \
 "}\n"
 
-#ifndef NFS_PUBLIC
+#if !defined(NFS_PUBLIC) && !defined(NFS_GAME_PS)   // ProStreet: MW's material replacements aren't linked
 #include "carbon_lamp_private.h"
 #else
 #include "car_lamp_public.h"

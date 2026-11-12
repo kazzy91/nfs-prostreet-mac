@@ -887,6 +887,7 @@ static void log_state(const char *who, const char *const *names, uint32_t old, u
     fflush(stdout);
     if (diag_on) diag_event("online %s state %u -> %u", who, old, now);
 }
+#ifndef NFS_GAME_PS   // MW's online-race hooks (MW guest addresses): not in the ProStreet build
 void f_007A0060(Cpu *c) {             // Server::SetState(state), cdecl
     if (ws2_online || lan_diag_on()) log_state("server", server_states, M32(0x009B4220), arg(c, 0));
     f_007A0060_orig(c);
@@ -1084,3 +1085,4 @@ void f_00755140(Cpu *c) {
     f_00755140_orig(c);
     if (ws2_online) { printf("online: FinishDriver -> %u\n", c->eax & 0xFF); fflush(stdout); }
 }
+#endif  // NFS_GAME_PS

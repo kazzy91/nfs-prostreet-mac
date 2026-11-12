@@ -30,6 +30,9 @@ void query_segment(void) {
 // after entering each of the first 4 tunnels/underpasses (AmIinATunnel of the main view, 0x982BA4, set by 006D6820).
 static int q_fake;
 static void query_test_ab(void) {
+#ifdef NFS_GAME_PS
+    return;                               // MW tunnel test (AmIinATunnel 0x982BA4)
+#endif
     static int mode = -1, tunnels, open_done, out_frames;
     static uint64_t race_frame0, ab_start, tunnel_frames;
     if (mode < 0) { const char *e = getenv("NFS_TEST_OCCLUSION"); mode = e && !strcmp(e, "ab") && diag_on; }

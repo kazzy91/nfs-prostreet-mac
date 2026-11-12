@@ -156,6 +156,13 @@ def build(game, exe, out=None, jobs=None, generate_only=False, log=print):
         t.write(f"const unsigned guest_func_count = {len(funcs)};\n")
         t.write(f'const char game_profile[] = "{profile.name}";\n')
         t.write(f'const char game_exe_fingerprint[] = "{img.fingerprint}";\n')
+        # what runtime/app.m checks the player's exe against: per-region digests (layout first) and the whole file
+        fp = exe_fingerprint.PROFILES[profile.fingerprint]
+        with open(exe, "rb") as f:
+            parts = exe_fingerprint.describe_regions(f.read(), fp["regions"], fp["tag"])[0]
+        names = ["layout"] + [n for n, _, _ in fp["regions"]]
+        t.write("const char game_exe_region_sha256[4][65] = {" + ",".join(f'"{parts[k] or "0" * 64}"' for k in names[:4]) + "};\n")
+        t.write(f'const char game_exe_sha256[] = "{fp.get("file_sha256", "")}";\n')
     files.append(os.path.join(out, "table.c"))
 
     errors = []
