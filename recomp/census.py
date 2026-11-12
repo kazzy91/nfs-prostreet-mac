@@ -86,7 +86,7 @@ def _run(chunk):
         traps.extend((int(t, 16), r) for t, r in TRAP.findall(code))
         for addr, i in rc.seen.items():
             if addr not in insns:
-                insns[addr] = (i.mnemonic, classify(i, X))
+                insns[addr] = (i.mnemonic, classify(i, X), i.size)
     return stubs, traps, insns
 
 
@@ -111,9 +111,28 @@ def census(path, manifest, rva=False, jobs=None, base=None):
         traps += t
         for k, v in i.items():
             insns.setdefault(k, v)
-    by_class = collections.Counter(c for _, c in insns.values())
-    mnem = collections.Counter(m for m, _ in insns.values())
-    per_class_top = {c: collections.Counter(m for m, k in insns.values() if k == c).most_common(8) for c in CLASSES}
+    by_class = collections.Counter(c for _, c, _ in insns.values())
+    mnem = collections.Counter(m for m, _, _ in insns.values())
+    per_class_top = {c: collections.Counter(m for m, k, _ in insns.values() if k == c).most_common(8) for c in CLASSES}
+    # Code coverage: which bytes of the code section the translation reaches; gaps split into padding and the rest.
+    covered = bytearray(hi - lo)
+    for a, (_, _, n) in insns.items():
+        if lo <= a < hi:
+            covered[a - lo:min(a - lo + n, hi - lo)] = b"\1" * min(n, hi - a)
+    code = img.read(lo, hi - lo) or bytes(hi - lo)
+    gaps, k = [], 0
+    while k < len(covered):
+        if covered[k]:
+            k += 1
+            continue
+        j = k
+        while j < len(covered) and not covered[j]:
+            j += 1
+        pad = sum(1 for x in code[k:j] if x in (0xCC, 0x90, 0x00))
+        gaps.append((lo + k, j - k, pad))
+        k = j
+    reached = sum(covered)
+    unreached_real = sum(n - p for _, n, p in gaps)
     imports = collections.Counter(n.split("!")[0] for n in img.imports.values())
     stub_reasons = collections.Counter(r for _, r in stubs)
     trap_reasons = collections.Counter(r for _, r in traps)
@@ -124,6 +143,9 @@ def census(path, manifest, rva=False, jobs=None, base=None):
         "traps": len(traps), "trap_reasons": trap_reasons.most_common(),
         "trap_list": [[f"{a:08X}", r] for a, r in sorted(set(traps))],
         "instructions": len(insns), "mnemonics": len(mnem),
+        "code_bytes": hi - lo, "code_reached": reached, "unreached_padding": sum(p for _, _, p in gaps),
+        "unreached_other": unreached_real,
+        "largest_gaps": [[f"{a:08X}", n, n - p] for a, n, p in sorted(gaps, key=lambda g: -(g[1] - g[2]))[:20]],
         "by_class": {c: by_class.get(c, 0) for c in CLASSES}, "top_by_class": per_class_top,
         "imports": sum(imports.values()), "imports_by_dll": imports.most_common(),
     }
@@ -135,6 +157,8 @@ def markdown(r):
     L = [f"Census of `{r['input']}` (recomp/census.py)", "", "| | |", "|---|---|",
          f"| Functions | {r['functions']:,} ({r['translated']:,} translate, {r['stubs']} stubs) |",
          f"| Instructions | {r['instructions']:,}, {r['mnemonics']} distinct mnemonics |",
+         f"| Code reached | {r['code_reached']:,} of {r['code_bytes']:,} bytes ({100.0 * r['code_reached'] / max(1, r['code_bytes']):.1f} %); "
+         f"unreached: {r['unreached_padding']:,} padding, {r['unreached_other']:,} other |",
          f"| x87 FPU | {pct('x87')} |", f"| MMX | {pct('MMX')} |", f"| SSE (float) | {pct('SSE1')} |",
          f"| SSE2 | {pct('SSE2')} |", f"| SSE3 and later | {pct('SSE3+')} |", f"| String ops | {pct('string')} |",
          f"| Traps (instructions the translator can't do) | {r['traps']:,} |",

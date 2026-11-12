@@ -14,6 +14,10 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 | `census.py` | Phase 2 instruction census: per-class counts (x87, MMX, SSE1/2/3+, string ops) of everything a manifest's functions reach, with the translator's own stubs and traps. Test: `census_test.py` |
 | `pe_image.py` | Any 32-bit PE as the recompiler reads it (`read`, `imports`), optionally moved with its base relocations; `recomp.PE` stays pinned to `speed.exe` |
 | `import_coverage.py` | An exe's imports vs the host layer, per DLL; routing read from `host_import` in `runtime/boot.c`, exact names only. `--mw` checks it on MW's own list. Test: `import_coverage_test.py` |
+| `xrefs.py` | Who calls an import or uses a string: IAT-slot references (a `jmp [slot]` thunk is followed to its rel32 callers), `--calls VA` (E8/E9 callers), `--string`; each hit mapped to its manifest function. Byte patterns, so read hits as leads. Test: `xrefs_test.py` |
+| `authenticode.py` | Stdlib Authenticode check: the PE hash, the signed digest and the RSA signature, and the signer certificate's SHA-256 (EA's 2007 certificate is pinned). Proves an exe is the publisher's unmodified build. Test: `authenticode_test.py` |
+| `exe_fingerprint.py` | Code fingerprints per game profile (`mw13`: speed.exe v1.3; `ps_demo`: ProStreet's demo-release nfs.exe); `identify()` names the profile or returns None |
+| `functions_ps.tsv` | ProStreet's function manifest (addresses and Ghidra names only, no bytes): 35,288 starts of the `ps_demo` nfs.exe. See `docs/ps-census.md` |
 
 ## How it translates
 
@@ -21,6 +25,7 @@ Run everything with `tools/.venv/bin/python` (capstone, unicorn).
 - **Registers** live in `Cpu`. **Flags** are C locals written by every flag-setting instruction; clang drops the unused ones.
 - **Stack:** the guest stack is real guest memory, and calls push the guest return address, so stack-passed arguments and `ret n` work unchanged.
 - **Control flow:** branches become `goto`. Switch jump tables (`jmp [reg*4+table]`) become a C `switch`. Direct calls become C calls. Indirect calls/jumps go through `dispatch(c, addr)`. Tail jumps, conditional tail jumps and fall-through into the next function call the target and return. IAT calls go to `host_import(c, slot)`.
+- **MW-only patches:** a few instructions at MW addresses (positional audio, Extra EA Trax, car85, the Lua resume, X360 data) are rewritten only when the image is MW's fingerprinted speed.exe (`Recompiler.mw_patches`; test `mw_patches_test.py`). Any other image translates as is.
 - **x87:** 8 `double` registers with TOP, status and control words. Precision control 00 rounds to `float`, like the original under Direct3D 9. Rounding control applies to `fist*`/`frndint`. Compares set C0/C2/C3, and `fnstsw ax` includes TOP. Invalid operations produce x87's *negative* default NaN. `fld/fstp tbyte` converts 80-bit ↔ double.
 
 ## Results (2026-10-18)

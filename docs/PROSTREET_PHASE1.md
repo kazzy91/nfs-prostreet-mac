@@ -182,3 +182,32 @@ is MW (X360 near shadows).
 layout, 1.3 update). Reusable pieces: `rtpatch.py` (RTPatch 7.00 decoder. ProStreet's patches are RTPatch 7.00/6.50,
 but the module refuses records that patch rather than replace, and pins MW's file list), `huff.py`, `xdvdfs.py`,
 `stage.py`/`install.py` patterns. `tools/gen_tables.py`: check.
+
+## 4. Redo on the Phase 0 executable (2026-11-12)
+
+The port's target is EA's **ProStreet demo release executable** (`nfs.exe`, internal name
+`ProStreet08DemoRelease.exe`): EA built the demo without SecuROM. `recomp/authenticode.py` confirms the file is exactly
+what Electronic Arts signed (the same 2007 certificate as on the retail disc's `nfs.exe` and `server.dll`), and
+`recomp/exe_fingerprint.py` pins its code fingerprint as the `ps_demo` profile.
+
+| | |
+|---|---|
+| Size / SHA-256 | 7,943,432 bytes / `a43bf6be6cee0d9f68d479af7605999ac823612127fc4dc07af283f1f5284630` |
+| Code fingerprint | `78c0d3abe0699de96ef8b3adea3de79d309cce641281e111ff6729b7a841f91f` (`ps_demo`) |
+| Build | linked 2007-10-30 23:38 UTC, MSVC 8.0, image base `0x00400000`, SizeOfImage `0xCF3000`, **relocations present** |
+| Entry point | `0x007DAB2F` in `.text` |
+| Sections | `.text` 0x401000 (0x51443B, entropy 6.65), `.rdata` 0x916000, `.data` 0x9EE000 (0x5BD294), `.tls`, `.rsrc`, `.reloc` |
+| Signature | Authenticode, Electronic Arts, valid (file digest, signed attributes and RSA signature all verify) |
+| Imports | **332 functions in 13 DLLs, 311 already handled** (`recomp/import_coverage.py`) |
+
+The SecuROM wrapper's imports are gone: no services, SIDs beyond one admin check, event log, pipes, console or dialogs.
+The 21 still missing are game code's own:
+
+| Group | Imports |
+|---|---|
+| C++ exceptions and SEH | MSVCR80 `__CxxFrameHandler3`, `_CxxThrowException`, `_except_handler3`, `_except_handler4_common`, `_setjmp3`, `longjmp`, `__RTDynamicCast`, `terminate`, `type_info` dtor, `std::exception` ctor/copy/dtor; KERNEL32 `RaiseException`, `UnhandledExceptionFilter` |
+| `std::string` | MSVCP80 `basic_string` default dtor, `(const char *)` and copy ctors |
+| Windows | USER32 `GetWindowLongA`; ADVAPI32 `AllocateAndInitializeSid`, `CheckTokenMembership`, `FreeSid` (an "is the user an administrator?" check) |
+
+With the real executable these can now be written against their call sites (Phase 2's manifest and census).
+

@@ -78,3 +78,6 @@ __pycache__/
 
 # --- Machine-local notes (CLAUDE.md rule 1: local state stays out of the public repo) -----------------
 CLAUDE.local.md
+
+# Setup disk images built from this checkout (tools/ps_setup/build_dmg.sh, tools/installer/build_installer.sh)
+dist/

@@ -36,9 +36,12 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
 
 - Phase 1 is done. Machine-specific state (what's in the local game folder, what Phase 0 is waiting on) lives in
   `CLAUDE.local.md`, which is gitignored. Read it if it exists, and keep local details out of this file.
-- The EU retail 1.0 disc `nfs.exe` (linked 2007-10-27) is SecuROM-protected: the entry point is in the `est` stub,
-  `.text` is encrypted (entropy 7.66). It can't be recompiled. Decide which version to target (1.0 or 1.1) in Phase 0;
-  MW targeted its last official patch.
+- **Phase 0 is done (2026-11-12): the target is EA's ProStreet demo release executable** (`nfs.exe`,
+  `ProStreet08DemoRelease.exe`, 7,943,432 bytes, SHA-256 `a43bf6be…`), built by EA without SecuROM. Authenticode-signed
+  by Electronic Arts and verified unchanged (`recomp/authenticode.py`); code fingerprint pinned as the `ps_demo` profile
+  (`recomp/exe_fingerprint.py`). Players get it from EA's ProStreet demo. The retail discs' `nfs.exe` (1.0 and 1.1)
+  are SecuROM-protected and can't be used. Imports: 332 in 13 DLLs, 311 handled, 21 missing (exceptions, `std::string`,
+  `GetWindowLongA`, an admin check; `docs/PROSTREET_PHASE1.md` §4).
 - CRT shim (`runtime/msvcr.c`, `docs/crt-shim.md`): MSVCR80 136/149 handled (memory, strings, math, printf/scanf,
   start-up, files/stdio, time, threads, data imports). C++ exceptions/SEH, `raise` and MSVCP80 remain; they need real call
   sites. Phase 0 tools: `recomp/pe_report.py`, `recomp/import_coverage.py`.
@@ -53,6 +56,9 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
   `tools/asan_off/`, which drops only `address` from `-fsanitize` (UBSan stays; `runtime/asan_off_test.py`). The
   ProStreet tests in `runtime/` and `recomp/` pass here; MW-only tests that need MW's generated inputs (`gen/*.inc`,
   `funcs.h` from `speed.exe`) fail in this checkout, as expected until Phase 4 takes them out of the ProStreet build.
+- Early Setup DMG (`tools/ps_setup/`, `docs/ps-setup.md`): `tools/ps_setup/build_dmg.sh` makes a ~0.5 MB Setup app
+  that checks the player's `nfs.exe` / game folder / disc image and explains the verdict; it can't build the game yet.
+  MW's Setup (`tools/installer/`) is untouched.
 - `.gitignore` blocks game executables/DLLs/disc images, game data formats, a game folder dropped into the checkout,
   build output (`recomp/out/`, `**/build/`, `*.o`, `*.a`, app bundles), dumps and `USERDATA/`. It's a safety net:
   still check `git status`. Add new derived-output paths to it as they appear.
@@ -74,7 +80,7 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
 
 Each phase ends with its exit criteria met and a short status note added to this file.
 
-### Phase 0: input
+### Phase 0: input ✅ (2026-11-12: EA's demo release executable, see Current state)
 An `nfs.exe` without SecuROM, from a release the user owns (plus `server.dll`, and `msvcr80.dll`/`msvcp80.dll` if
 the CRT is translated), in the game folder outside the repo. Check it with
 `python3 -I recomp/pe_report.py <nfs.exe>` (must exit 0, "verdict: plain") and recount imports with
@@ -85,7 +91,13 @@ recorded here, code fingerprint pinned in `exe_fingerprint.py` behind a game pro
 PE inspection, import coverage, generic vs MW classification, this file. See `docs/PROSTREET_PHASE1.md`. Redo §1–2 on
 the Phase 0 exe.
 
-### Phase 2: function boundaries
+### Phase 2: function boundaries (in progress, 2026-11-12)
+Status: manifest in the repo (`recomp/functions_ps.tsv`, 35,288 starts of the demo exe), census and entry points in
+`docs/ps-census.md`. 51,078 traps in 3,257 functions, nearly all SSE scalar/packed float and `fcomip`/`fucomip`
+(Phase 3's translator work); 12 functions trap on something else. WinMain `004AF9A0`; window, D3D9 and the message
+pump run on a thread of their own (`004AFBC0`), the game on WinMain's thread (`006BF2D0`). MW's inline translator
+patches now apply only to MW's fingerprinted exe (`Recompiler.mw_patches`). Left: name the Snd engine's entry points
+and the main loop's frame function inside `006BF2D0`.
 - Ghidra headless auto-analysis of `nfs.exe` → a `functions_ps.tsv` manifest in the `functions_v13.tsv` format, with
   data-referenced starts and their call closure: `recomp/ghidra_functions.py --data-refs` (Ghidra 12.2 via Homebrew,
   JDK 25). Proven end to end on ProStreet's `server.dll`: 1,345 functions, all translated and compiled
@@ -137,5 +149,6 @@ the Phase 0 exe.
   without errors.
 
 ### Later / out of scope
-App bundle and Setup rebrand, F10 settings menu, controller prompts, widescreen/FOV. Online play (EA servers are gone,
+Grow the early Setup (`tools/ps_setup/`) into the real one (build stages after the check) and the game app bundle,
+F10 settings menu, controller prompts, widescreen/FOV. Online play (EA servers are gone,
 PunkBuster), X360 features and the Windows host (`runtime/win`) are out of scope.

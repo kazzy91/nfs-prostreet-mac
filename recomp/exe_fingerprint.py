@@ -65,20 +65,50 @@ def _region(data, secs, rva, size):
     return None
 
 
-def describe(data):
-    """({'layout'|'.text'|'.rdata'|'.data': hex digest or None}, fingerprint hex) of a speed.exe image."""
+def describe_regions(data, regions, tag):
+    """({'layout'|<region names>: hex digest or None}, fingerprint hex) for a game profile's regions and tag."""
     opt, secs = _parse(data)
     base, entry = struct.unpack_from("<I", data, opt + 28)[0], struct.unpack_from("<I", data, opt + 16)[0]
     imp = struct.unpack_from("<II", data, opt + 96 + 8)
     out = {"layout": hashlib.sha256(struct.pack("<III", base, entry, imp[0]) + struct.pack("<I", imp[1]) +
-                                    b"".join(struct.pack("<II", r, s) for _, r, s in REGIONS)).hexdigest()}
-    for name, rva, size in REGIONS:
+                                    b"".join(struct.pack("<II", r, s) for _, r, s in regions)).hexdigest()}
+    for name, rva, size in regions:
         blob = _region(data, secs, rva, size)
         out[name] = hashlib.sha256(blob).hexdigest() if blob is not None else None
-    h = hashlib.sha256(b"nfsmw-exe-fp-v1\n")
-    for k in NAMES:
+    h = hashlib.sha256(tag)
+    for k in ["layout"] + [name for name, _, _ in regions]:
         h.update(bytes.fromhex(out[k]) if out[k] else bytes(32))
     return out, h.hexdigest()
+
+
+def describe(data):
+    """({'layout'|'.text'|'.rdata'|'.data': hex digest or None}, fingerprint hex) of a speed.exe image."""
+    return describe_regions(data, REGIONS, b"nfsmw-exe-fp-v1\n")
+
+
+# Game profiles: the builds the port supports, by code fingerprint (same scheme as MW's above: layout plus the loaded
+# .text/.rdata/.data; headers, resources, relocations, signatures and appended data don't count).
+#   ps_demo  NFS ProStreet, EA's demo release executable (internal name ProStreet08DemoRelease.exe, linked 2007-10-30,
+#            7,943,432 bytes, Authenticode-signed by Electronic Arts; built without SecuROM). The Phase 0 target.
+PROFILES = {
+    "mw13": {"regions": REGIONS, "tag": b"nfsmw-exe-fp-v1\n", "fingerprint": SUPPORTED_FINGERPRINT,
+             "name": "NFS Most Wanted PC v1.3 (speed.exe)"},
+    "ps_demo": {"regions": ((".text", 0x1000, 0x51443B), (".rdata", 0x516000, 0xD755E), (".data", 0x5EE000, 0x5BD294)),
+                "tag": b"nfsps-exe-fp-v1\n", "fingerprint": "78c0d3abe0699de96ef8b3adea3de79d309cce641281e111ff6729b7a841f91f",
+                "file_sha256": "a43bf6be6cee0d9f68d479af7605999ac823612127fc4dc07af283f1f5284630",
+                "name": "NFS ProStreet demo release (nfs.exe, ProStreet08DemoRelease.exe)"},
+}
+
+
+def identify(data):
+    """The profile name whose code fingerprint this image has, or None (also None for anything that isn't a PE)."""
+    try:
+        for name, p in PROFILES.items():
+            if describe_regions(data, p["regions"], p["tag"])[1] == p["fingerprint"]:
+                return name
+    except ValueError:
+        pass
+    return None
 
 
 def check(data, path="speed.exe"):
