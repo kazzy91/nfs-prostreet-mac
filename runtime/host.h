@@ -56,6 +56,12 @@ int win32_more(Cpu *c, const char *fn);     // win32_more.c (KERNEL32/USER32/ADV
 uint32_t host_load_library(Cpu *c, const char *name);   // boot.c: LoadLibraryA
 int threads_close(uint32_t h);
 void threads_init(void);
+// Runs `fn` on the host main thread on behalf of the calling guest thread (its thread identity, holding the GIL),
+// for AppKit work: ProStreet's window thread isn't the host main thread. The caller lets go of the GIL meanwhile.
+// On the main thread itself it just calls fn.
+void threads_on_main(void (^fn)(void));
+// Host-only work on the main thread (no guest state touched): lets go of the GIL meanwhile if the caller holds it.
+void threads_main_sync(void (^fn)(void));
 void gil_maybe_yield(Cpu *c);
 void gil_yield(Cpu *c);
 void gil_release(void);

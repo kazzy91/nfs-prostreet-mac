@@ -240,7 +240,7 @@ static NSScreen *hdr_output_screen(void) {
 float render_hdr_display_potential(void) {
     __block float potential=1;
     void (^sample)(void)=^{ potential=(float)hdr_output_screen().maximumPotentialExtendedDynamicRangeColorComponentValue; };
-    if(NSThread.isMainThread)sample();else dispatch_sync(dispatch_get_main_queue(),sample);
+    if(NSThread.isMainThread)sample();else threads_main_sync(sample);
     return isfinite(potential) ? potential : 1;
 }
 static float hdr_output_ceiling(float h) {
@@ -255,7 +255,7 @@ static void hdr_output_frame_boundary(void) {
     if(!hdr_output_on)return;
     __block float h=1;
     void (^sample)(void)=^{ h=(float)hdr_output_screen().maximumExtendedDynamicRangeColorComponentValue; };
-    if(NSThread.isMainThread)sample();else dispatch_sync(dispatch_get_main_queue(),sample);
+    if(NSThread.isMainThread)sample();else threads_main_sync(sample);
     // Poll the actual window.screen every frame: moves, HDR mode changes and
     // wake need no asynchronous notification that could mutate a world frame.
     // Transport stays linear/16F for this renderer's lifetime. H<=1 uses the
@@ -382,7 +382,7 @@ void render_hdr_output_init(void) {
         hdr_output_diag("after-enable", MTLPixelFormatInvalid);
     };
     if (NSThread.isMainThread) configure();
-    else dispatch_sync(dispatch_get_main_queue(), configure);
+    else threads_main_sync(configure);
     // Compile before frames; a failed HDR PSO restores the untouched SDR contract.
     if (!hdr_output_pipeline(MTLPixelFormatRGBA16Float) || !hdr_output_pipeline(MTLPixelFormatBGRA8Unorm)) {
         hdr_output_on = 0;
@@ -394,7 +394,7 @@ void render_hdr_output_init(void) {
             hdr_output_diag("SDR-pipeline-fallback", MTLPixelFormatInvalid);
         };
         if (NSThread.isMainThread) restore();
-        else dispatch_sync(dispatch_get_main_queue(), restore);
+        else threads_main_sync(restore);
     }
     hdr_output_frame_boundary();
 }

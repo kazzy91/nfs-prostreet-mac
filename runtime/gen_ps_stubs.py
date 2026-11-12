@@ -5,7 +5,8 @@ runtime still references (runtime/build_ps.sh links no MW feature file).
 
 Each symbol's declaration is taken from the runtime headers, else from a declaration inside the linked sources, and
 the stub keeps that exact signature: functions return a zero value of their type (0, NULL, nil, false, an empty
-struct), variables are zero. The stub file includes the headers, so the compiler checks every stub against its
+struct; a `const char *` function returns "", never NULL; a `char *` one returns NULL, since its caller owns and frees
+the result), variables are zero. The stub file includes the headers, so the compiler checks every stub against its
 declaration. A symbol with no declaration found stops the generator (name it in MANUAL below instead).
 As ProStreet features replace these, their symbols leave the list and the stubs go.
 """
@@ -24,6 +25,9 @@ SOURCES = ("boot.c app.m heap.c d3dx.c d3dx_effect.c d3dx_tex.c readback.c threa
 INCLUDES = ["<Metal/Metal.h>", "<Foundation/Foundation.h>", '"host.h"', '"render_internal.h"', '"materials.h"']
 MANUAL = {    # symbol -> full definition, for what the parser can't find (comma-joined local declarations, runtime.h)
     "car85_path": "int car85_path(const char *guest, char *host, size_t n) { return 0; }  // recomp/runtime.h",
+    # "none" is -1 for these, and 0 would be a real answer (file descriptor 0 is stdin: every game file read stdin)
+    "x360audio_open": "int x360audio_open(const char *win, const char *host) { return -1; }  // boot.c file_open: fd or -1",
+    "widescreen_native_slot": "int widescreen_native_slot(void) { return -1; }  // d3d9.m: the native resolution's slot or -1",
     "materials_flake_force": "int materials_flake_force;  // user32.m (local extern)",
     "materials_flake_tint": "int materials_flake_tint;  // user32.m (local extern)",
     "materials_flake_test": "void materials_flake_test(int tint, int force) {}  // user32.m",
@@ -77,6 +81,8 @@ def main(argv):
             body.append(f"{typ} {sym}{rest};{' ' * max(1, 40 - len(typ) - len(sym))}// {where}")
         elif typ == "void" or typ == "static void":
             body.append(f"void {sym}({rest or 'void'}) {{}}  // {where}")
+        elif re.fullmatch(r"const\s+char\s*\*", typ):   # a borrowed string: callers print or compare it, never NULL
+            body.append(f'{typ} {sym}({rest or "void"}) {{ return ""; }}  // {where}')
         else:
             body.append(f"{typ} {sym}({rest or 'void'}) {{ return ({typ}){{0}}; }}  // {where}")
     if missing:

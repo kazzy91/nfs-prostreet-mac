@@ -193,7 +193,11 @@ static void restart_capture(char **argv) {
 const char *log_dir(void) {
     static char dir[1024];
     if (!dir[0]) {
+#ifdef NFS_GAME_PS
+        snprintf(dir, sizeof dir, "%s/Library/Logs/NFSPS-port", getenv("HOME") ? getenv("HOME") : "/tmp");
+#else
         snprintf(dir, sizeof dir, "%s/Library/Logs/NFSMW-port", getenv("HOME") ? getenv("HOME") : "/tmp");
+#endif
         mkdir(dir, 0755);
     }
     return dir;
@@ -288,11 +292,16 @@ void app_pref_set(const char *key, const char *value) {
 // previous run's kept as NFSMW.previous.log. Each running copy has its own: a copy holds NFSMW.lock while it runs
 // (the system drops the lock when it exits or crashes), and one started meanwhile writes NFSMW-2.log, and so on,
 // so a second launch never moves a log that's still being written. Crash reports follow the same names.
-static char log_base[16] = "NFSMW";
+#ifdef NFS_GAME_PS
+#define LOG_NAME "NFSPS"
+#else
+#define LOG_NAME "NFSMW"
+#endif
+static char log_base[16] = LOG_NAME;
 const char *log_name(void) { return log_base; }
 static void log_claim(void) {
     for (int n = 1; n <= 9; ++n) {
-        if (n > 1) snprintf(log_base, sizeof log_base, "NFSMW-%d", n);
+        if (n > 1) snprintf(log_base, sizeof log_base, LOG_NAME "-%d", n);
         char lock[1100];
         snprintf(lock, sizeof lock, "%s/%s.lock", log_dir(), log_base);
         int fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
@@ -321,7 +330,7 @@ static void log_setup(void) {
     char when[64];
     strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", localtime(&now));
     NSString *ver = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"];
-    printf("boot: NFSMW %s, %s, macOS %s\n", ver ? ver.UTF8String : "(not bundled)", when,
+    printf("boot: " LOG_NAME " %s, %s, macOS %s\n", ver ? ver.UTF8String : "(not bundled)", when,
            NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String);
 }
 
@@ -397,6 +406,10 @@ static int exe_digests(const uint8_t *d, size_t len, char parts[4][65], char fp[
 static int check_game_dir(const char *dir, char *why, size_t n) {
     char path[1100];
     snprintf(path, sizeof path, "%s/" GAME_EXE, dir);
+#ifdef NFS_GAME_PS
+    // the exe may live outside the data folder (boot.c): NFS_PS_EXE
+    if (getenv("NFS_PS_EXE") && *getenv("NFS_PS_EXE")) snprintf(path, sizeof path, "%s", getenv("NFS_PS_EXE"));
+#endif
     struct stat st;
     if (stat(dir, &st) || !S_ISDIR(st.st_mode)) { snprintf(why, n, "The folder %s can't be found.", dir); return 1; }
     FILE *f = fopen(path, "rb");
@@ -667,6 +680,13 @@ void app_cocoa_init(void) {
         NSApp.mainMenu = bar;
         [NSApp finishLaunching];
     }
+}
+
+// ProStreet: the host main thread's job once the guest threads run (boot.c). It serves AppKit work they send it
+// (threads_on_main, dispatch's main queue) until the process exits.
+void app_main_loop(void) {
+    app_cocoa_init();
+    for (;;) @autoreleasepool { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, false); }
 }
 
 // A fatal runtime error (boot.c's die): tell the player, on the main thread only (others just log and exit).

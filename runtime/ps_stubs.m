@@ -162,12 +162,12 @@ void portmenu_update(void) {}  // user32.m
 void posaudio_diag_second(void) {}  // posaudio.h
 unsigned post_cuts_ao(int proof, int ordinary_depth, int reuse, int empty) { return (unsigned){0}; }  // post_cuts.h
 int post_cuts_curve(uint32_t width, uint32_t height, int split) { return (int){0}; }  // post_cuts.h
-const char * post_cuts_curve_source(void) { return (const char *){0}; }  // post_cuts.h
+const char * post_cuts_curve_source(void) { return ""; }  // post_cuts.h
 int post_cuts_full_target(int split, unsigned level, unsigned slice, uint32_t width, uint32_t height, uint32_t out_width, uint32_t out_height) { return (int){0}; }  // post_cuts.h
 int postfx_ab_shot(char *path, size_t n) { return (int){0}; }  // render_present.m
 int postfx_look_variant(const char *v) { return (int){0}; }  // host.h
 size_t private_cars_count(void) { return (size_t){0}; }  // private_cars.h
-const char * private_cars_error(void) { return (const char *){0}; }  // private_cars.h
+const char * private_cars_error(void) { return ""; }  // private_cars.h
 const PrivateCar * private_cars_get(size_t selected_index) { return (const PrivateCar *){0}; }  // private_cars.h
 int private_cars_init(const char *root, int enabled, const char *const *original_swaps, size_t original_count) { return (int){0}; }  // private_cars.h
 void private_cars_metadata_userdata(const char *root) {}  // private_cars.h
@@ -186,7 +186,7 @@ void report_auto(const char *why, const char *diag_file) {}  // diag.c
 void report_frame(uint64_t frame, uint32_t flow) {}  // diag.c
 void report_init(void) {}  // boot.c (report.m isn't linked yet)
 void report_note(const char *fmt, ...) {}  // user32.m
-const char * report_session_dir(void) { return (const char *){0}; }  // dsound.c
+const char * report_session_dir(void) { return ""; }  // dsound.c
 int report_shot(char *path, size_t n) { return (int){0}; }  // render_present.m
 void report_shot_ready(const char *path) {}  // render_present.m
 int roadfilm_draw(uint64_t hash, float wetness) { return (int){0}; }  // roadfilm.h
@@ -225,13 +225,13 @@ void split_capture_receiver_texture(unsigned stage, uint32_t texture) {}  // hos
 int split_view_rect(uint32_t view, uint32_t rect[4]) { return (int){0}; }  // host.h
 int traffic_detail_ab_shot(char *path, size_t n) { return (int){0}; }  // render_present.m
 int traffic_pilot_boot(int enabled) { return (int){0}; }  // traffic_pilot.h
-const char * traffic_pilot_error(void) { return (const char *){0}; }  // traffic_pilot.h
+const char * traffic_pilot_error(void) { return ""; }  // traffic_pilot.h
 int underglow_ui_step(const char *step, uint64_t elapsed, const char *pkg, const char **key) { return (int){0}; }  // underglow_ui.h
 int widescreen_display_changed(void) { return (int){0}; }  // user32.m
 void widescreen_drop_offset(Cpu *c, uint32_t vec) {}  // host.h
 void widescreen_drop_quad(Cpu *c, uint32_t verts, uint32_t stride) {}  // host.h
 void widescreen_mode(int i, uint32_t *w, uint32_t *h) {}  // host.h
-int widescreen_native_slot(void) { return (int){0}; }  // d3d9.m
+int widescreen_native_slot(void) { return -1; }  // d3d9.m: the native resolution's slot or -1
 void widescreen_projection(Cpu *c, uint32_t proj) {}  // host.h
 void widescreen_setup(void) {}  // host.h
 uint32_t x360_arrest_draws;               // d3d9.m
@@ -247,7 +247,7 @@ void x360_shadow_camera(Cpu *c, uint32_t view, uint32_t proj) {}  // host.h
 int x360_shadow_map_size(void) { return (int){0}; }  // host.h
 void x360_shadow_texture_size(uint32_t *w, uint32_t *h) {}  // host.h
 uint32_t x360_ui_diag_hash(uint32_t guest) { return (uint32_t){0}; }  // render.m
-int x360audio_open(const char *win, const char *host) { return (int){0}; }  // x360audio.h
+int x360audio_open(const char *win, const char *host) { return -1; }  // boot.c file_open: fd or -1
 int x360copspeech_open(const char *win, X360MusicHandle *out) { return (int){0}; }  // x360copspeech.h
 void x360copspeech_warm(void) {}  // x360copspeech.h
 int x360music_open(const char *win, X360MusicHandle *out) { return (int){0}; }  // x360audio.h

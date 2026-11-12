@@ -3,4 +3,5 @@
 # calling it; a strong f_XXXXXXXX in the runtime takes every call and can still call f_XXXXXXXX_orig.
 #
 # address   owner: function
-# (none yet: Phase 5 adds them as boot needs them)
+
+007B81A0    ps_boot.c: FEDemoBootFlowStateManager next screen (DEMO_MUSIC_LEGAL never ends; BOOT_SKIPINTRO)

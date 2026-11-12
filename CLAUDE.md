@@ -146,7 +146,23 @@ not a translated second module. The demo imports no WSOCK32. Details: `docs/ps-l
 - **Exit:** the binary links with no undefined symbols. Every import resolves to a handler or to the explicit
   "not implemented" die.
 
-### Phase 5: boot
+### Phase 5: boot ✅ (2026-11-12)
+Status: the demo exe, on an installed game's data (the exe from `NFS_PS_EXE`), boots through EA's start screens and
+the Attract movie (VP6, played by the game's own translated player) to the title screen and, after a click or
+Return, to the demo's front end (the Nitrocide / Nevada Highway Speed Challenge event screen), rendered through
+Metal, with no unknown imports. `BOOT_SKIPINTRO=1` goes straight to the title. What it took, beyond Phase 4:
+- threading: the guest's main thread on a pthread, the host main thread serving AppKit (`app_main_loop`); USER32 and
+  DirectInput's pump run there for the calling guest thread (`threads_on_main`); host-only main-thread work lets go
+  of the GIL (`threads_main_sync`);
+- `RaiseException` (MSVC thread naming), `GetWindowLongA`, d3dx9_34's `ID3DXEffect` (`DeleteParameterBlock`,
+  `SetRawValue`), the demo's registry key (`Install Dir` must end in `\`: the game appends file names to it), a
+  read-only game folder (writes go to `USERDATA/game-overlay`), `NFSPS-port` folders;
+- shader length by parsing (a `0x0000FFFF` dword inside a shader cut it short); stub return values (NULL for owned
+  strings, -1 where -1 means none);
+- function starts Ghidra missed behind MSVC switch tables (manifest: 35,267 starts);
+- the boot flow (`runtime/ps_boot.c`, hook `007B81A0`): DEMO_MUSIC_LEGAL never asks for the next screen, so its
+  step goes straight to the Attract movie (why it doesn't end is open).
+Open for Phase 6: frame pacing (several hundred fps), keys the game turns into screenshots, DEMO_MUSIC_LEGAL.
 - CRT start-up and static constructors run, the main loop starts, the window opens. Implement imports as they're hit.
   Registry under a ProStreet key in `USERDATA`. Case-insensitive game paths. Threads.
 - D3D9 device creation through Metal, first Present (clear colour), then the intro movies (check ProStreet's movie

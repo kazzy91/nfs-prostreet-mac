@@ -6,6 +6,7 @@
 // has no atomics (speed.exe has no lock-prefixed instructions), so this also sidesteps x86 vs. ARM memory
 // ordering. All host-side state (heap, handles, message queue) is touched only with the GIL held.
 // Windows uses its separate runtime/win/threads.c implementation; these Mac synchronization changes leave it unchanged.
+#include <dispatch/dispatch.h>
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdlib.h>
@@ -23,6 +24,7 @@ static pthread_cond_t obj_cv = PTHREAD_COND_INITIALIZER;   // some object change
 static uint64_t next_ticket, serving, change_seq;
 static uint64_t held_since;
 static __thread int guest_worker;  // a CreateThread thread (0 on the game's main thread): idle time is counted for main only
+static __thread int gil_mine;      // this thread holds the GIL (threads_main_sync lets go of it only then)
 
 // BOOT_DIAG: who holds the GIL while the game thread waits for it. Each guest thread has a GilRec (its current
 // import, threads.c/boot.c); gil_holder points at the holder's, and the game thread's open wait is published in
@@ -36,6 +38,7 @@ static void gil_acquire_locked_at(void *site) {
     int watch = diag_on && !guest_worker && t != serving;
     if (watch) { gil_main_wait_site = site; gil_main_wait_since = host_ticks(); }
     while (t != serving) pthread_cond_wait(&gil_cv, &gm);
+    gil_mine = 1;
     held_since = host_ticks();
     if (diag_on) {
         my_rec.tid = cur_tid_diag();
@@ -62,6 +65,7 @@ static int iowake_on(void) {
     return on;
 }
 static void gil_release_locked(void) {
+    gil_mine = 0;
     ++serving;
     pthread_cond_broadcast(&gil_cv);
     if (io_note) { io_note = 0; ++io_seq; pthread_cond_broadcast(&io_cv); }
@@ -519,6 +523,34 @@ int threads_list(pthread_t *ths, Cpu **cpus, uint32_t *tids, int cap) {
     return n;
 }
 
+// The host main thread serves AppKit (app_main_loop) while the guest threads run elsewhere (ProStreet). The caller
+// gives up the GIL first, so a guest thread that holds it can never wait for a main thread that waits for the GIL.
+void threads_on_main(void (^fn)(void)) {
+    if (pthread_main_np()) { fn(); return; }
+    KObj *me = self;
+    int worker = guest_worker;
+    gil_release();
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        KObj *self0 = self;
+        int worker0 = guest_worker;
+        self = me; guest_worker = worker;       // the main thread acts as the caller: GetCurrentThreadId, owned locks
+        gil_acquire();
+        fn();
+        gil_release();
+        self = self0; guest_worker = worker0;
+    });
+    gil_acquire();
+}
+// Host-only work (AppKit, CAMetalLayer) on the main thread, from any thread: a guest thread lets go of the GIL while
+// it waits, since the main thread may be running another guest thread's work that needs the GIL (threads_on_main).
+// A host thread without the GIL (the render thread) just waits. On the main thread it calls fn.
+void threads_main_sync(void (^fn)(void)) {
+    if (pthread_main_np()) { fn(); return; }
+    int held = gil_mine;
+    if (held) gil_release();
+    dispatch_sync(dispatch_get_main_queue(), fn);
+    if (held) gil_acquire();
+}
 void threads_init(void) {
     main_thread = pthread_self();
     gil_acquire();

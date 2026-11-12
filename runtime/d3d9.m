@@ -1039,8 +1039,10 @@ static int v_GetVertexDeclaration(Cpu *c) { M32(arg(c, 1)) = dev.decl; if (dev.d
 static int v_SetFVF(Cpu *c) { dev.fvf = arg(c, 1); dev.decl = 0; RET(D3D_OK, 2); }
 static int v_GetFVF(Cpu *c) { M32(arg(c, 1)) = dev.fvf; RET(D3D_OK, 2); }
 static Obj *make_shader(int kind, uint32_t vt, uint32_t fn) {
-    uint32_t n = 1;
-    while (M32(fn + 4 * (n - 1)) != 0x0000FFFF && n < 65536) ++n;   // END token
+    // The shader's length: up to its END token as an instruction (the parser skips comments and operands, where the
+    // value 0x0000FFFF can also occur: a constant, the CTAB data). The first 0x0000FFFF dword is only the fallback.
+    uint32_t n = (uint32_t)sm_token_count((const uint32_t *)(G + fn), 65536);
+    if (!n) { n = 1; while (M32(fn + 4 * (n - 1)) != 0x0000FFFF && n < 65536) ++n; }
     Obj *s = new_obj(kind, vt);
     s->ntokens = n;
     s->tokens = malloc(4 * n);

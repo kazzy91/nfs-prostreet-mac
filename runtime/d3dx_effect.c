@@ -968,6 +968,27 @@ static int e_SetValue(Cpu *c) {                // (this, h, data*, bytes)
     touch(p);
     RET(D3D_OK, 4);
 }
+// d3dx9_34 (ProStreet) additions to ID3DXEffect: SetRawValue(h, data*, byte offset, bytes) writes into the parameter's
+// value as one flat byte range (array elements one after the other); DeleteParameterBlock(block) has nothing to free
+// (parameter blocks are no-ops here).
+static int e_SetRawValue(Cpu *c) {             // (this, h, data*, offset, bytes)
+    Param *p = param_of(FX, arg(c, 1));
+    if (!p || p->cls == PC_OBJECT) RET(D3DERR_INVALIDCALL, 5);
+    uint32_t src = arg(c, 2), off = arg(c, 3), n = arg(c, 4);
+    if (off >= p->bytes) RET(D3D_OK, 5);
+    if (n > p->bytes - off) n = p->bytes - off;
+    if (p->elements) {
+        uint32_t pos = 0;                              // flat position of this member's first byte
+        for (int i = 0; i < p->nmembers; ++i) {
+            uint32_t k = p->members[i].bytes, a = off > pos ? off : pos, b = off + n < pos + k ? off + n : pos + k;
+            if (a < b) memcpy((uint8_t *)p->members[i].data + (a - pos), G + src + (a - off), b - a);
+            pos += k;
+        }
+    } else memcpy((uint8_t *)p->data + off, G + src, n);
+    touch(p);
+    RET(D3D_OK, 5);
+}
+static int e_DeleteParameterBlock(Cpu *c) { RET(D3D_OK, 2); }
 static int e_GetValue(Cpu *c) {
     Param *p = param_of(FX, arg(c, 1));
     if (!p) RET(D3DERR_INVALIDCALL, 4);
@@ -1234,7 +1255,12 @@ static const char *const n_effect[] = {"QueryInterface", "AddRef", "Release", "G
     "GetTexture", "GetPixelShader", "GetVertexShader", "SetArrayRange", "GetPool", "SetTechnique",
     "GetCurrentTechnique", "ValidateTechnique", "FindNextValidTechnique", "IsParameterUsed", "Begin", "BeginPass",
     "CommitChanges", "EndPass", "End", "GetDevice", "OnLostDevice", "OnResetDevice", "SetStateManager",
-    "GetStateManager", "BeginParameterBlock", "EndParameterBlock", "ApplyParameterBlock", "CloneEffect"};
+    "GetStateManager", "BeginParameterBlock", "EndParameterBlock", "ApplyParameterBlock",
+#ifdef NFS_GAME_PS
+    "DeleteParameterBlock", "CloneEffect", "SetRawValue"};   // d3dx9_34's layout (ProStreet)
+#else
+    "CloneEffect"};                                           // d3dx9_26's layout (MW)
+#endif
 #define E(n) {#n, e_##n}
 static const Impl i_effect[] = {E(QueryInterface), E(AddRef), E(Release), E(GetDesc), E(GetParameterDesc),
     E(GetTechniqueDesc), E(GetPassDesc), E(GetParameter), E(GetParameterByName), E(GetParameterBySemantic),
@@ -1246,7 +1272,7 @@ static const Impl i_effect[] = {E(QueryInterface), E(AddRef), E(Release), E(GetD
     E(SetMatrixTransposePointerArray), E(SetString), E(GetString), E(SetTexture), E(GetTexture), E(SetArrayRange),
     E(GetPool), E(SetTechnique), E(GetCurrentTechnique), E(ValidateTechnique), E(FindNextValidTechnique),
     E(IsParameterUsed), E(Begin), E(BeginPass), E(CommitChanges), E(EndPass), E(End), E(GetDevice), E(OnLostDevice),
-    E(OnResetDevice), E(SetStateManager), E(GetStateManager), {0, 0}};
+    E(OnResetDevice), E(SetStateManager), E(GetStateManager), E(DeleteParameterBlock), E(SetRawValue), {0, 0}};
 static const char *const n_pool[] = {"QueryInterface", "AddRef", "Release"};
 static const Impl i_pool[] = {{"QueryInterface", e_QueryInterface}, {"AddRef", e_AddRef}, {"Release", e_Release}, {0, 0}};
 static uint32_t vt_effect, vt_pool;

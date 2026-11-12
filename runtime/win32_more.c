@@ -3,6 +3,8 @@
 // ADVAPI32 / VERSION / RPCRT4 / ole32 surface. host_import reaches it after the existing handlers (boot.c's routing),
 // so nothing here overrides MW behaviour. Every handler is __stdcall (RET pops the arguments).
 #include <ctype.h>
+#include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -146,10 +148,30 @@ int win32_more_close(uint32_t h) {
 // ---------------- the handlers ----------------
 static int kernel32_more(Cpu *c, const char *fn) {
     char a[1024], b[1024];
+    // ---- RaiseException(code, flags, nargs, args): only MSVC's thread-naming idiom (code 0x406D1388, a
+    // THREADNAME_INFO {0x1000, name, thread id, flags}) inside a __try whose __except swallows it. Without a debugger
+    // the exception does nothing but reach that handler, so returning is the same; the current thread (id -1) gets
+    // its name on the host thread too. Any other exception stops by name: real SEH dispatch isn't implemented. ----
+    if (!strcmp(fn, "RaiseException")) {
+        uint32_t code = arg(c, 0), n = arg(c, 2), info = arg(c, 3);
+        if (code != 0x406D1388u) {        // not handled: host_import stops with the import's name
+            fprintf(stderr, "boot: RaiseException code %08X (only the thread-naming 406D1388 is handled)\n", code);
+            return 0;
+        }
+        if (n >= 3 && info && M32(info) == 0x1000u && M32(info + 4)) {
+            char name[64];
+            snprintf(name, sizeof name, "%.63s", (const char *)G + M32(info + 4));
+            if (M32(info + 8) == 0xFFFFFFFFu) pthread_setname_np(name);
+            if (diag_on) diag_event("thread name %08X: %s", M32(info + 8), name);
+        }
+        RET(0, 4);
+    }
     // ---- wide-character file calls: the narrow ones' behaviour on the name made narrow ----
     if (!strcmp(fn, "CreateFileW")) {                // (name, access, share, sa, disposition, flags, template)
         narrow(arg(c, 0), a, sizeof a);
-        RET(host_file_open(a, arg(c, 1), arg(c, 2), arg(c, 4)), 7);
+        uint32_t h = host_file_open(a, arg(c, 1), arg(c, 2), arg(c, 4));
+        if (boot_trace) fprintf(stderr, "      CreateFileW(%s, access %X, disposition %u) -> %X\n", a, arg(c, 1), arg(c, 4), h);
+        RET(h, 7);
     }
     if (!strcmp(fn, "DeleteFileW") || !strcmp(fn, "RemoveDirectoryW")) { narrow(arg(c, 0), a, sizeof a); RET(host_file_remove(a, fn[0] == 'R'), 1); }
     if (!strcmp(fn, "CreateDirectoryW")) { narrow(arg(c, 0), a, sizeof a); RET(host_mkdir(a), 2); }

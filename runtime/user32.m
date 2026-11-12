@@ -592,7 +592,13 @@ int user32_request_close(void) {
     return w != NULL;
 }
 
-void user32_pump(void) { pump(0); }
+void user32_pump(void) {
+#ifdef NFS_GAME_PS
+    threads_on_main(^{ pump(0); });        // DirectInput's poll comes from a game thread
+#else
+    pump(0);
+#endif
+}
 
 // BOOT_KEYS=frame:KEY[,frame:KEY...]: scripted key presses (down at `frame`, up 4 frames later) for runs without a
 // keyboard. KEY: RETURN ESCAPE SPACE BACK UP DOWN LEFT RIGHT F10 TAB, or a letter/digit (also typed, as WM_CHAR, like a real
@@ -1010,7 +1016,19 @@ static void wait_messages(void) {
 // ---------------- imports ----------------
 static uint32_t gdi_next = 0x00030000;
 
+static int user32_import(Cpu *c, const char *fn);
+#ifdef NFS_GAME_PS
+// ProStreet calls USER32 from its window thread (004AFBC0), not the host main thread: every call runs on the main
+// thread on that thread's behalf (threads_on_main), as AppKit requires.
 int win32_user32(Cpu *c, const char *fn) {
+    __block int r = 0;
+    threads_on_main(^{ r = user32_import(c, fn); });
+    return r;
+}
+#else
+int win32_user32(Cpu *c, const char *fn) { return user32_import(c, fn); }
+#endif
+static int user32_import(Cpu *c, const char *fn) {
     cocoa_init();
     // classes and windows
     if (!strcmp(fn, "RegisterClassExA")) {
@@ -1125,6 +1143,16 @@ int win32_user32(Cpu *c, const char *fn) {
         else if (i == -20) { old = w->exstyle; w->exstyle = v; }
         else if (i == -21) { old = w->userdata; w->userdata = v; }
         RET(old, 3);
+    }
+    if (!strcmp(fn, "GetWindowLongA")) {         // (hwnd, index): the fields SetWindowLongA keeps (ProStreet)
+        Win *w = win(arg(c, 0));
+        if (!w) { last_error = 1400; RET(0, 2); }                  // ERROR_INVALID_WINDOW_HANDLE
+        int32_t i = (int32_t)arg(c, 1);
+        uint32_t v = i == -4 ? w->wndproc : i == -16 ? w->style : i == -20 ? w->exstyle : i == -21 ? w->userdata
+                   : i == -6 ? (w->cls >= 0xC000 && w->cls - 0xC000 < (uint32_t)class_count && classes[w->cls - 0xC000].hinstance
+                                    ? classes[w->cls - 0xC000].hinstance : 0x00400000u)   // atoms are 0xC000 + index
+                   : 0;                                             // GWL_ID, GWL_HWNDPARENT: 0 for a top-level window
+        RET(v, 2);
     }
     if (!strcmp(fn, "GetWindowRect")) {          // (hwnd, rect)
         uint32_t h = arg(c, 0), r = arg(c, 1);

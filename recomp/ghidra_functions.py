@@ -17,7 +17,10 @@ recomp/ghidra/ExportFunctions.java, then writes the function starts:
            and Ghidra also leaves some direct call targets inside a neighbour's body (ProStreet: small constructors
            after a jmp-only function, an import thunk). Direct calls seen anywhere in the linear sweep count too (switch
            cases reached only through a jump table), when the target passes the same plausible-start test. A
-           `call $+5` (the get-EIP idiom) is not a start, and neither is an address holding int3 (padding).
+           `call $+5` (the get-EIP idiom) is not a start, and neither is an address holding int3 (padding). A
+           16-byte-aligned target right after int3 padding is accepted even when the bytes before the padding decode
+           as junk (MSVC's switch tables, of case addresses or byte indexes, sit between a function's ret and it), and
+           so is one right after a table of nearby case addresses, padded or not.
            Needs capstone (tools/.venv/bin/python).
 The input is only read (Ghidra imports a copy into its project); nothing is executed. The manifest holds addresses and
 names only, no code bytes, so it is committable metadata (CLAUDE.md rule 1).
@@ -156,6 +159,28 @@ def data_referenced(path, rows, rva):
     known = {a + (base if rva else 0) for a, _ in rows}
     names = {a + (base if rva else 0): nm for a, nm in rows}
 
+    def aligned_after_padding(t):
+        """MSVC puts a switch's tables (case addresses, or byte indexes) between a function's ret and the padding: the
+        sweep decodes them as junk, so the plausible-start test fails. A pointer target at a 16-byte boundary right
+        after int3 padding is a function start all the same (MSVC aligns functions so, padding with int3)."""
+        return t % 16 == 0 and read(t - 1, 1) == b"\xcc" and read(t, 1) != b"\xcc"
+
+    def after_case_table(t):
+        """A switch's table of case addresses right before t (after optional int3 padding): its last two dwords are
+        code addresses within 64 KiB of t. MSVC also places such a table with no padding before the next function."""
+        k = t
+        while k > lo and read(k - 1, 1) == b"\xcc":
+            k -= 1
+        words = read(k - 8, 8) if k % 4 == 0 else None
+        return words is not None and all(lo <= w < hi and abs(w - t) < 0x10000 for w in struct.unpack("<II", words))
+
+    def start_ok(t):
+        if _plausible(t, starts, ends):
+            return True
+        # a switch's byte-index table can follow its case-address table: it starts with index 0, and no MSVC
+        # function starts with 00 (add r/m8, r8)
+        return read(t, 1) != b"\x00" and (aligned_after_padding(t) or after_case_table(t))
+
     def boundary_ok(t):
         if read(t, 1) == b"\xcc":                    # int3 padding between functions, never a start
             return False
@@ -169,10 +194,10 @@ def data_referenced(path, rows, rva):
         sb = data[s["raw_off"]:s["raw_off"] + s["raw_size"]]
         for k in range(0, len(sb) - 3, 4):
             t = struct.unpack_from("<I", sb, k)[0]
-            if lo <= t < hi and t not in known and boundary_ok(t) and _plausible(t, starts, ends):
+            if lo <= t < hi and t not in known and boundary_ok(t) and start_ok(t):
                 extra.add(t)
     for t in imms:
-        if t not in known and t not in extra and boundary_ok(t) and _plausible(t, starts, ends):
+        if t not in known and t not in extra and boundary_ok(t) and start_ok(t):
             extra.add(t)
     initterm = {a for a, nm in names.items() if "initterm" in nm}
     for k in range(len(blob) - 15):

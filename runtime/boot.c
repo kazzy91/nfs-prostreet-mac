@@ -333,7 +333,11 @@ const char *userdata_dir(void) {
     if (!dir[0]) {
         const char *e = getenv("BOOT_USERDATA");
         if (e && *e) snprintf(dir, sizeof dir, "%s", e);
+#ifdef NFS_GAME_PS
+        else snprintf(dir, sizeof dir, "%s/Library/Application Support/NFSPS-port", getenv("HOME") ? getenv("HOME") : "/tmp");
+#else
         else snprintf(dir, sizeof dir, "%s/Library/Application Support/NFSMW-port", getenv("HOME") ? getenv("HOME") : "/tmp");
+#endif
         // with its parents: a missing parent made every save and registry write fail silently (a "first run" each time)
         for (char *p = dir + 1; *p; ++p) if (*p == '/') { *p = 0; mkdir(dir, 0755); *p = '/'; }
         mkdir(dir, 0755);
@@ -384,6 +388,33 @@ static void save_cleanup(void) {
     save_cleanup_dir(fd, root);
 }
 static int file_is_save(const char *path);
+#ifdef NFS_GAME_PS
+// The game folder (the player's installed game) is never written. A write lands in USERDATA/game-overlay at the same
+// relative path (a write to an existing file copies it there first, so edits work), and reads prefer that copy. The
+// game's screenshots (nfsProStreetNNN.jpg, next to the exe), configs and temporary files all end up there.
+static int in_game_dir(const char *p) {
+    size_t k = game_dir ? strlen(game_dir) : 0;
+    return k && !strncmp(p, game_dir, k) && (p[k] == '/' || !p[k]);
+}
+static void overlay_of(const char *p, char *out, size_t n) { snprintf(out, n, "%s/game-overlay%s", userdata_dir(), p + strlen(game_dir)); }
+static void ps_write_path(char *host, size_t n, int copy_existing) {
+    if (!in_game_dir(host)) return;
+    char o[4096], t[4096];
+    overlay_of(host, o, sizeof o);
+    snprintf(t, sizeof t, "%s", o);
+    for (char *q = t + 1; *q; ++q) if (*q == '/') { *q = 0; mkdir(t, 0755); *q = '/'; }   // its parent folders
+    struct stat st;
+    if (copy_existing && stat(o, &st) && !stat(host, &st) && S_ISREG(st.st_mode)) {
+        int in = open(host, O_RDONLY), out = in < 0 ? -1 : open(o, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        char buf[65536];
+        ssize_t k;
+        while (out >= 0 && (k = read(in, buf, sizeof buf)) > 0) if (write(out, buf, (size_t)k) != k) break;
+        if (in >= 0) close(in);
+        if (out >= 0) close(out);
+    }
+    snprintf(host, n, "%s", o);
+}
+#endif
 static int resolve(const char *win, char *out, size_t n) {
     char rel[1024];
     snprintf(rel, sizeof rel, "%s", win);
@@ -410,6 +441,14 @@ static int resolve(const char *win, char *out, size_t n) {
         }
         if (!found) { strncat(out, "/", n - strlen(out) - 1); strncat(out, tok, n - strlen(out) - 1); }
     }
+#ifdef NFS_GAME_PS
+    if (in_game_dir(out)) {                                    // a copy the game wrote earlier wins
+        char o[4096];
+        struct stat st;
+        overlay_of(out, o, sizeof o);
+        if (!stat(o, &st)) snprintf(out, n, "%s", o);
+    }
+#endif
     return 0;
 }
 // Private converter probe: only existing car geometry/texture files, never saves or write opens.
@@ -632,6 +671,10 @@ static int profile_write_denied(const char *path) {
 }
 static uint32_t file_open(const char *win, const char *host, uint32_t access, uint32_t share, uint32_t disp, uint32_t flags) {
     int k = 1, fd = -1, fresh = 0, fl = file_flags(access, disp);
+#ifdef NFS_GAME_PS
+    char wpath[4096];
+    if (fl != O_RDONLY) { snprintf(wpath, sizeof wpath, "%s", host); ps_write_path(wpath, sizeof wpath, !(fl & O_TRUNC)); host = wpath; }
+#endif
     if ((fl != O_RDONLY) && profile_write_denied(host)) {
         errno = EACCES; file_error(); return 0xFFFFFFFFu;
     }
@@ -822,6 +865,9 @@ int host_file_flush(uint32_t h) { return file_flush(h); }
 int host_file_remove(const char *win, int dir) {             // DeleteFileA / RemoveDirectoryA
     char host[4096];
     resolve(win, host, sizeof host);
+#ifdef NFS_GAME_PS
+    ps_write_path(host, sizeof host, 0);
+#endif
     if (profile_write_denied(host)) { last_error = 5; return 0; }
     if ((dir ? rmdir(host) : unlink(host))) { file_error(); return 0; }
     return 1;
@@ -830,6 +876,9 @@ int host_file_rename(const char *from, const char *to) {      // MoveFileA
     char a[4096], b[4096];
     resolve(from, a, sizeof a);
     resolve(to, b, sizeof b);
+#ifdef NFS_GAME_PS
+    ps_write_path(a, sizeof a, 1); ps_write_path(b, sizeof b, 0);
+#endif
     if (profile_write_denied(a) || profile_write_denied(b)) { last_error = 5; return 0; }
     if (rename(a, b)) { file_error(); return 0; }
     return 1;
@@ -837,6 +886,9 @@ int host_file_rename(const char *from, const char *to) {      // MoveFileA
 int host_mkdir(const char *win) {                             // CreateDirectoryA
     char host[4096];
     resolve(win, host, sizeof host);
+#ifdef NFS_GAME_PS
+    ps_write_path(host, sizeof host, 0);
+#endif
     if (mkdir(host, 0755)) { if (errno == EEXIST) last_error = 183; else file_error(); return 0; }
     return 1;
 }
@@ -1000,7 +1052,12 @@ static int win32(Cpu *c, const char *fn) {
     if (!strcmp(fn, "GetEnvironmentStringsW") || !strcmp(fn, "GetEnvironmentStrings")) RET(galloc(8), 0);
     if (!strcmp(fn, "FreeEnvironmentStringsA") || !strcmp(fn, "FreeEnvironmentStringsW")) RET(1, 1);
     if (!strcmp(fn, "GetModuleFileNameA")) {
-        const char *s = arg(c, 0) && arg(c, 0) == server_handle() ? "C:\\NFSMW\\server.dll" : "C:\\NFSMW\\speed.exe";
+        const char *s = arg(c, 0) && arg(c, 0) == server_handle() ? "C:\\NFSMW\\server.dll" :
+#ifdef NFS_GAME_PS
+            "C:\\NFSMW\\nfs.exe";             // the fake install root C:\NFSMW maps to the game folder
+#else
+            "C:\\NFSMW\\speed.exe";
+#endif
         uint32_t n = arg(c, 2);
         strncpy((char *)G + arg(c, 1), s, n);
         RET(strlen(s), 3);
@@ -1134,6 +1191,9 @@ static int win32(Cpu *c, const char *fn) {
     if (!strcmp(fn, "CreateDirectoryA")) {
         char host[4096];
         resolve((char *)G + arg(c, 0), host, sizeof host);
+#ifdef NFS_GAME_PS
+        ps_write_path(host, sizeof host, 0);
+#endif
         int r = mkdir(host, 0755);
         if (r && errno == EEXIST) { last_error = 183; RET(0, 2); }   // ERROR_ALREADY_EXISTS
         RET(r == 0, 2);
@@ -1340,6 +1400,9 @@ static int win32(Cpu *c, const char *fn) {
     if (!strcmp(fn, "DeleteFileA") || !strcmp(fn, "RemoveDirectoryA")) {
         char host[4096];
         resolve((char *)G + arg(c, 0), host, sizeof host);
+#ifdef NFS_GAME_PS
+        ps_write_path(host, sizeof host, 0);                    // only the overlay's copy can go
+#endif
         if (profile_write_denied(host)) { last_error = 5; RET(0, 1); }
         int r = fn[0] == 'D' ? unlink(host) : rmdir(host);
         if (r) last_error = 2;
@@ -1349,6 +1412,9 @@ static int win32(Cpu *c, const char *fn) {
         char a[4096], b[4096];
         resolve((char *)G + arg(c, 0), a, sizeof a);
         resolve((char *)G + arg(c, 1), b, sizeof b);
+#ifdef NFS_GAME_PS
+        ps_write_path(a, sizeof a, 1); ps_write_path(b, sizeof b, 0);
+#endif
         if (profile_write_denied(a) || profile_write_denied(b)) { last_error = 5; RET(0, 2); }
         int r = rename(a, b);
         if (r) last_error = 2;
@@ -1616,6 +1682,9 @@ static void deadline_start(void) {
 
 // Restart-only values are pinned before guest registration or file I/O.
 static void private_cars_boot(void) {
+#ifdef NFS_GAME_PS
+    return;                               // MW's private cars
+#endif
     char root[4096];
 #if defined(NFS_PUBLIC) && NFS_PUBLIC
     const char *car85_public_reconcile(Cpu *, unsigned);
@@ -1649,6 +1718,17 @@ static void private_cars_boot(void) {
 }
 
 // ---------------- loader ----------------
+#ifdef NFS_GAME_PS
+static void *guest_main(void *p) {          // the guest's main thread (WinMain's): see the end of main()
+    Cpu *c = p;
+    threads_init();
+    threads_set_main_cpu(c);
+    printf("boot: image loaded, %u translated functions, entry %08X\n", guest_func_count, speed_entry);
+    dispatch(c, speed_entry);
+    printf("boot: entry returned eax=%08X after %u import calls\n", c->eax, import_calls);
+    exit(0);
+}
+#endif
 int main(int argc, char **argv) {
     game_dir = app_start(argc, argv);
     void settings_init(void), settings_dump(const char *), report_init(void);
@@ -1662,7 +1742,14 @@ int main(int argc, char **argv) {
     boot_trace = getenv("BOOT_TRACE") != NULL;
     deadline_start();
     char path[4096];
+#ifdef NFS_GAME_PS
+    // The data come from the game folder (an installed game); the code from the supported exe, which can live
+    // elsewhere: NFS_PS_EXE names it (the installed game's own nfs.exe may be a protected retail build).
+    if (getenv("NFS_PS_EXE") && *getenv("NFS_PS_EXE")) snprintf(path, sizeof path, "%s", getenv("NFS_PS_EXE"));
+    else snprintf(path, sizeof path, "%s/nfs.exe", game_dir);
+#else
     snprintf(path, sizeof path, "%s/speed.exe", game_dir);
+#endif
     FILE *f = fopen(path, "rb");
     if (!f) die("cannot open %s: %s", path, strerror(errno));
     fseek(f, 0, SEEK_END);
@@ -1715,6 +1802,21 @@ int main(int argc, char **argv) {
 #if !defined(NFS_PUBLIC) || !NFS_PUBLIC
     if (diag_on && private_cars_error()[0]) diag_event("cars: %s",private_cars_error());
 #endif
+#ifdef NFS_GAME_PS
+    // ProStreet runs its window, D3D device and message pump on a thread of its own (004AFBC0) and the game on
+    // WinMain's. AppKit needs the host main thread, so the guest's main thread runs on a pthread, and the host main
+    // thread serves AppKit for the guest threads (threads_on_main) until the process exits.
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, 64u << 20);   // as threads.c's guest threads: translated code recurses on it
+    pthread_t guest;
+    if (pthread_create(&guest, &at, guest_main, c)) die("cannot start the guest main thread");
+    pthread_attr_destroy(&at);
+    void app_main_loop(void);
+    app_main_loop();
+    return 0;
+}
+#else
     threads_init();
     threads_set_main_cpu(c);
     x360copspeech_warm();                  // host-only CRC/conversion, before the loading screen needs speech
@@ -1723,3 +1825,4 @@ int main(int argc, char **argv) {
     printf("boot: entry returned eax=%08X after %u import calls\n", c->eax, import_calls);
     return 0;
 }
+#endif

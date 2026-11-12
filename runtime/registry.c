@@ -18,17 +18,27 @@
 // The processor key is there as on any Windows machine: its ~MHz matches rdtsc (3 GHz). Without it EA's movie
 // library calibrates rdtsc at the first movie by busy-waiting for a second (FUN_007ECBBE).
 #define REG_HKEY_BASE 0x3000u
+// The game's own key, where its installer writes Install Dir and friends (ProStreet: the demo build's key).
+#ifdef NFS_GAME_PS
+#define GAME_REG_KEY "HKLM\\Software\\Electronic Arts\\Need for Speed ProStreet Demo"
+#else
+#define GAME_REG_KEY "HKLM\\Software\\EA Games\\Need for Speed Most Wanted"
+#endif
 // BEGIN offline registry: audit4fix_test.py compiles reg_save in a scratch-only C harness.
 typedef struct { const char *key; char name[64]; uint32_t type, dw; char sz[260]; } RegValue;
-static const char *reg_keys[] = {NULL, "HKLM\\Software\\EA Games\\Need for Speed Most Wanted",
+static const char *reg_keys[] = {NULL, GAME_REG_KEY,
                                   "HKLM\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"};
 static RegValue reg_vals[64] = {
-    {"HKLM\\Software\\EA Games\\Need for Speed Most Wanted", "Install Dir", 1, 0, "C:\\NFSMW"},
-    {"HKLM\\Software\\EA Games\\Need for Speed Most Wanted", "CD Drive", 1, 0, "C:\\NFSMW\\"},
-    {"HKLM\\Software\\EA Games\\Need for Speed Most Wanted", "Language", 1, 0, "English US"},
-    {"HKLM\\Software\\EA Games\\Need for Speed Most Wanted", "CacheSize", 1, 0, "1468006400"},
-    {"HKLM\\Software\\EA Games\\Need for Speed Most Wanted", "SwapSize", 1, 0, "0"},
-    {"HKLM\\Software\\EA Games\\Need for Speed Most Wanted", "StreamingInstall", 1, 0, "off"},
+#ifdef NFS_GAME_PS
+    {GAME_REG_KEY, "Install Dir", 1, 0, "C:\\NFSMW\\"},   // ProStreet appends file names to it directly: the trailing \ matters
+#else
+    {GAME_REG_KEY, "Install Dir", 1, 0, "C:\\NFSMW"},
+#endif
+    {GAME_REG_KEY, "CD Drive", 1, 0, "C:\\NFSMW\\"},
+    {GAME_REG_KEY, "Language", 1, 0, "English US"},
+    {GAME_REG_KEY, "CacheSize", 1, 0, "1468006400"},
+    {GAME_REG_KEY, "SwapSize", 1, 0, "0"},
+    {GAME_REG_KEY, "StreamingInstall", 1, 0, "off"},
     {"HKLM\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", "~MHz", 4, 3000, ""},
 };
 static void reg_path(char *out, size_t n) {
