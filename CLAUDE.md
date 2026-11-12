@@ -201,6 +201,10 @@ frames.
 - **Playtest app**: `tools/ps_setup/build_playtest.sh` -> `dist/NFS ProStreet Playtest.app` and
   `dist/NFS-ProStreet-Playtest.dmg` (gitignored; it contains translated game code: this Mac only, never shared). It
   asks for the game folder once: EA's demo install, whose `nfsdemo.exe` is now accepted beside `nfs.exe`.
+- **Memory**: the game reserves ~460 MB of its process heap at start-up and passes 500 MB in a race; MW's 512 MB heap
+  ran out on the results screen after a won race ("guest process heap full"). The demo exe isn't
+  large-address-aware (2 GB on Windows). ProStreet's process heap is now 0x02200000-0x48000000 (1,118 MB), the bump
+  region (galloc, VirtualAlloc) 0x48000000-0x50000000, with a bounds check in VirtualAlloc too.
 Open: roadside bushes (`IDI_GRASSCARD_FX`) and part of the crowd render overexposed/tinted: the grass vertex shader
 reads `c12` (sun colour), which isn't in its CTAB, so it keeps a stale value (255 from another effect's upload);
 DEMO_MUSIC_LEGAL never ends; menus and options; the race itself (Phase 7). Scripted runs (`BOOT_KEYS`) ignore the

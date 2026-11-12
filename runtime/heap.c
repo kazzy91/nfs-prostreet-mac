@@ -13,7 +13,8 @@
 // HEAP_ZERO_MEMORY; pages above the heap's high-water mark are known zero and aren't touched.
 // Thread safety: guest code calls in under the guest lock; each heap also has its own mutex for host callers.
 //
-// Guest memory map: process heap 0x10000000-0x30000000 (512 MB), resource heap 0x50000000-0x7F000000.
+// Guest memory map: process heap 0x10000000-0x30000000 (512 MB; ProStreet 0x02200000-0x48000000), resource heap
+// 0x50000000-0x7F000000.
 // heap_test.c tests this file standalone (cc -DHEAP_TEST).
 #include <pthread.h>
 #include <stdint.h>
@@ -353,8 +354,16 @@ int heap_check(Heap *h) {
 // ---------------- guest side ----------------
 #include <mach/mach.h>
 
+#ifdef NFS_GAME_PS
+// ProStreet reserves ~460 MB at start-up and passes 500 MB in a race: 512 MB ran out on the results screen. The demo
+// exe isn't large-address-aware, so on Windows it had 2 GB of address space: here the heap takes everything from
+// just above server.dll's reserved range up to the bump region (boot.c HEAP_BASE), 1,118 MB.
+#define PROCESS_HEAP_LO 0x02200000u
+#define PROCESS_HEAP_HI 0x48000000u
+#else
 #define PROCESS_HEAP_LO 0x10000000u
 #define PROCESS_HEAP_HI 0x30000000u
+#endif
 #define RESOURCE_HEAP_LO 0x50000000u
 #define RESOURCE_HEAP_HI 0x7F000000u
 #define PROCESS_HEAP_HANDLE 0x00010000u

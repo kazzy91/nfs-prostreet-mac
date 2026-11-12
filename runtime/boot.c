@@ -47,7 +47,11 @@ extern const unsigned speed_import_count;
 #define TEB 0x7FFDE000u
 #define PEB 0x7FFDF000u
 #define STACK_TOP 0x7FF00000u
+#ifdef NFS_GAME_PS
+#define HEAP_BASE 0x48000000u           // bump region (galloc, VirtualAlloc) below the resource heap: the process heap
+#else                                   // ends here (heap.c)
 #define HEAP_BASE 0x30000000u
+#endif
 static uint32_t heap_next = HEAP_BASE;
 static Cpu *g_cpu;
 #include <signal.h>
@@ -1038,6 +1042,7 @@ static int win32(Cpu *c, const char *fn) {
         if (!arg(c, 0)) heap_note(3, (void *)(uintptr_t)M32(c->esp), n);
         heap_next = (heap_next + 0xFFFF) & ~0xFFFFu;
         uint32_t a = heap_next;
+        if ((uint64_t)a + n >= 0x50000000u) die("VirtualAlloc of %u bytes: the bump region is full (%u MB used)", n, (heap_next - HEAP_BASE) >> 20);
         heap_next += (n + 0xFFFF) & ~0xFFFFu;
         memset(G + a, 0, n);
         RET(arg(c, 0) ? arg(c, 0) : a, 4);
