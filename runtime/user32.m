@@ -600,7 +600,7 @@ void user32_pump(void) {
 #endif
 }
 
-// BOOT_KEYS=frame:KEY[,frame:KEY...]: scripted key presses (down at `frame`, up 4 frames later) for runs without a
+// BOOT_KEYS=frame:KEY[:N][,frame:KEY...]: scripted key presses (down at `frame`, up 4 frames later, or N) for runs without a
 // keyboard. KEY: RETURN ESCAPE SPACE BACK UP DOWN LEFT RIGHT F10 TAB, or a letter/digit (also typed, as WM_CHAR, like a real
 // keyboard: name entry reads characters).
 static void press(const char *name, int down, uint64_t frame) {
@@ -937,7 +937,10 @@ void user32_script(uint64_t frame, uint64_t draws) {
         for (++p; *p && *p != ',' && n < 15; ++p) name[n++] = *p;
         name[n] = 0;
         if (*p == ',') ++p;
-        if (frame == fr || frame == fr + 4) press(name, frame == fr, frame);
+        uint64_t hold = 4;                       // frame:KEY:N holds KEY for N frames (driving: 1900:UP:1200)
+        char *colon = strchr(name, ':');
+        if (colon) { *colon = 0; hold = strtoull(colon + 1, NULL, 10); if (!hold) hold = 4; }
+        if (frame == fr || frame == fr + hold) press(name, frame == fr, frame);
     }
 }
 

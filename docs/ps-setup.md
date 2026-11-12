@@ -24,3 +24,11 @@ On this Mac (2026-11-12), run from the mounted DMG: the retail disc image gives 
 
 When building becomes possible, this grows into the real Setup: the same check first, then `ghidra_functions.py`,
 `census.py`, the recompiler and the runtime build, the way MW's Setup runs its stages.
+
+## Playtest app (local only)
+
+`tools/ps_setup/build_playtest.sh` wraps the built `recomp/out/ps_demo/boot_ps` in `dist/NFS ProStreet Playtest.app`
+and `dist/NFS-ProStreet-Playtest.dmg` for testing on the Mac that built it. The binary contains code translated from
+the player's `nfs.exe`, so these stay in the gitignored `dist/` and are never shared: the release remains the Setup
+that builds on each player's Mac. The app asks once for the game folder (EA's demo install; `nfsdemo.exe` is
+accepted), Option at launch asks again; saves and logs go to `~/Library/Application Support/NFSPS-port`.

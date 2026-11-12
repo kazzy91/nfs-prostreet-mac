@@ -3896,6 +3896,23 @@ static void draw_impl(uint32_t type, uint32_t prims, int indexed, int32_t base_v
                 }
             }
             for (int k = 0; k < vse->refl.n_inputs; ++k) fprintf(df, "  vs in v%u usage %u/%u\n", vse->refl.inputs[k].reg, vse->refl.inputs[k].usage, vse->refl.inputs[k].usage_index);
+            for (int i = 0; i < nel; ++i) {      // the first vertices the draw fetches (through its indices): position as stored
+                if (el[i].usage != 0 || el[i].index != 0 || up_vertices || (up_indices && indexed)) continue;
+                Obj *vb = obj(dev.stream[el[i].stream]), *ib = indexed ? obj(dev.indices) : NULL;
+                uint32_t st = strides[el[i].stream];
+                if (!vb || !vb->mem[0] || !st || (indexed && (!ib || !ib->mem[0]))) continue;
+                for (uint32_t k = 0; k < 6; ++k) {
+                    uint32_t isz = ib && ib->fmt == 102 ? 4 : 2, at = (start + k) * isz;
+                    if (indexed && at + isz > ib->size) break;
+                    uint32_t ix = indexed ? (isz == 4 ? M32(ib->mem[0] + at) : M16(ib->mem[0] + at)) : 0;
+                    uint32_t v = indexed ? (uint32_t)(base_vertex + (int)ix) : start + k;
+                    uint32_t off = dev.stream_off[el[i].stream] + v * st + el[i].offset;
+                    if (off + 16 > vb->size) { fprintf(df, "  pos[%u] index %u -> vertex %u past the buffer\n", k, ix, v); continue; }
+                    uint32_t a = vb->mem[0] + off;
+                    if (el[i].type == 10) fprintf(df, "  pos[%u] index %u vertex %u: short4n %d %d %d %d\n", k, ix, v, (int16_t)M16(a), (int16_t)M16(a + 2), (int16_t)M16(a + 4), (int16_t)M16(a + 6));
+                    else fprintf(df, "  pos[%u] index %u vertex %u: %.6g %.6g %.6g %.6g (type %u)\n", k, ix, v, MF32(a), MF32(a + 4), MF32(a + 8), MF32(a + 12), el[i].type);
+                }
+            }
             for (int s2 = 0; s2 < 16; ++s2)
                 if (used_streams & (1u << s2)) {
                     Obj *vb = obj(dev.stream[s2]);

@@ -1760,8 +1760,12 @@ int main(int argc, char **argv) {
 #ifdef NFS_GAME_PS
     // The data come from the game folder (an installed game); the code from the supported exe, which can live
     // elsewhere: NFS_PS_EXE names it (the installed game's own nfs.exe may be a protected retail build).
+    // EA's demo installer names the same exe nfsdemo.exe (the fingerprint check below decides either way).
     if (getenv("NFS_PS_EXE") && *getenv("NFS_PS_EXE")) snprintf(path, sizeof path, "%s", getenv("NFS_PS_EXE"));
-    else snprintf(path, sizeof path, "%s/nfs.exe", game_dir);
+    else {
+        snprintf(path, sizeof path, "%s/nfs.exe", game_dir);
+        if (access(path, R_OK)) snprintf(path, sizeof path, "%s/nfsdemo.exe", game_dir);
+    }
 #else
     snprintf(path, sizeof path, "%s/speed.exe", game_dir);
 #endif

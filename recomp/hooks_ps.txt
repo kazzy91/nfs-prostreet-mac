@@ -6,3 +6,4 @@
 
 007B81A0    ps_boot.c: FEDemoBootFlowStateManager next screen (DEMO_MUSIC_LEGAL never ends; BOOT_SKIPINTRO)
 006B5000    ps_render_sync.c: render thread command replay (yields the GIL while it waits for the main thread)
+006E40A0    ps_video.c: SelectMode (the default 640x480 becomes the display size; NFS_PS_RES)

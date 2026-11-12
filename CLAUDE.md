@@ -183,8 +183,28 @@ MW `006069C0`/`006069E8`, ProStreet `006C3E60`/`006C3EAB`, same guest code), res
   installer data works; `sound\NISRevData\*.bin` is missing in both and is optional.
 - The render thread's command replay loop (004AFBC0 -> `006B5000`) waits for the main thread without making an import,
   so it held the GIL forever: hook `006B5000` (`runtime/ps_render_sync.c`) offers the GIL when its batch is empty.
-`BOOT_FILES=1` logs every file open (game path -> host path or the error). Open: the 3D world renders as exploded
-geometry (spikes from the camera: vertex data or shader constants), why DEMO_MUSIC_LEGAL never ends, menus/options.
+- **3D renders** (pre-race hub: cars, crowd, banners, sky): `ID3DXEffect::SetRawValue` is a memcpy of shader
+  constants, and ProStreet passes its matrices through it already laid out for the registers (WorldViewProj,
+  cmWorldMat, bone palettes). They were taken as matrices in the parameter's layout and transposed on upload into the
+  shaders' column-class constants, so every draw exploded towards the screen centre. A matrix written raw is now
+  uploaded as its register image (`raw_regs` in `runtime/d3dx_effect.c`) until a typed setter replaces it.
+Diagnostics: `BOOT_FILES=1` logs every file open (game path -> host path or the error); `BOOT_D3DLOG=1` logs vertex
+declarations, instancing, raw effect writes and matrix upload classes; the draw dump (`BOOT_DIAG` +
+`BOOT_DIAG_DRAWS=<frame>`) lists each draw's first fetched vertex positions; `BOOT_KEYS=frame:KEY:N` holds a key N
+frames.
+- **The race runs** (2026-11-12): Start Race -> driver aids (Racer) -> Race Match Up -> Nevada Highway Speed Challenge
+  with AI opponents, HUD, checkpoints; holding the throttle drives the car (it left the road and was TOTALED).
+- **Resolution**: a fresh profile asks for 640x480. Hook `006E40A0` SelectMode (`runtime/ps_video.c`) replaces that
+  default with the largest mode in the game's own list closest to the display's shape (1920x1200 on a 16:10 MacBook),
+  in the call and in the video settings (+0x6C/+0x70); `NFS_PS_RES=WxH` forces one; a choice made in the game's
+  options is kept. The game's list holds only standard modes (1920x1200 .. 640x480).
+- **Playtest app**: `tools/ps_setup/build_playtest.sh` -> `dist/NFS ProStreet Playtest.app` and
+  `dist/NFS-ProStreet-Playtest.dmg` (gitignored; it contains translated game code: this Mac only, never shared). It
+  asks for the game folder once: EA's demo install, whose `nfsdemo.exe` is now accepted beside `nfs.exe`.
+Open: roadside bushes (`IDI_GRASSCARD_FX`) and part of the crowd render overexposed/tinted: the grass vertex shader
+reads `c12` (sun colour), which isn't in its CTAB, so it keeps a stale value (255 from another effect's upload);
+DEMO_MUSIC_LEGAL never ends; menus and options; the race itself (Phase 7). Scripted runs (`BOOT_KEYS`) ignore the
+physical keyboard and mouse on purpose.
 - Front end renders correctly: ProStreet's shaders through `host/shaders`, the new d3dx9_34 functions, missing D3D9
   paths (`ColorFill`, `UpdateSurface` if used; `GetRenderTargetData` is implemented but untested on a real frame).
 - Keyboard/mouse via DirectInput, then controllers. DirectSound audio and music. Profiles/saves in `USERDATA`.

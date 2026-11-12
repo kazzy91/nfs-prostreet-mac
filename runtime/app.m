@@ -407,8 +407,9 @@ static int check_game_dir(const char *dir, char *why, size_t n) {
     char path[1100];
     snprintf(path, sizeof path, "%s/" GAME_EXE, dir);
 #ifdef NFS_GAME_PS
-    // the exe may live outside the data folder (boot.c): NFS_PS_EXE
+    // the exe may live outside the data folder (boot.c): NFS_PS_EXE. EA's demo installer names it nfsdemo.exe.
     if (getenv("NFS_PS_EXE") && *getenv("NFS_PS_EXE")) snprintf(path, sizeof path, "%s", getenv("NFS_PS_EXE"));
+    else if (access(path, R_OK)) snprintf(path, sizeof path, "%s/nfsdemo.exe", dir);
 #endif
     struct stat st;
     if (stat(dir, &st) || !S_ISDIR(st.st_mode)) { snprintf(why, n, "The folder %s can't be found.", dir); return 1; }

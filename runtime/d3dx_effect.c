@@ -40,6 +40,7 @@ struct Param {
     uint32_t handle;
     char name[64], semantic[64];
     uint32_t cls, type, rows, cols, elements, member_count, bytes, flags;
+    int raw_regs;               // matrix last written by SetRawValue: data is the register image, uploaded as is
     Param *members;             // elements or struct members
     int nmembers;
     uint8_t *data;              // numeric value (register order), or for objects: guest object/handle in data[0..3]
@@ -400,6 +401,7 @@ static void set_floats(Param *p, const float *v, uint32_t n) {
         return;
     }
     if (p->cls > PC_MATRIX_COLUMNS) return;
+    p->raw_regs = 0;
     uint32_t cnt = p->rows * p->cols;
     for (uint32_t i = 0; i < cnt && i < n; ++i) {
         uint32_t u;
@@ -670,8 +672,16 @@ static void ctab_resolve(Effect *fx, State *st) {
                 memcpy(&ti, cb + co + 20 * k + 12, 4);
                 memcpy(&ccls, cb + ti, 2);
                 Param *p = find_param(fx->params, fx->nparams, (const char *)cb + nm);
-                if (!p) continue;
+                if (!p) {
+                    static int log = -1;
+                    if (log < 0) log = getenv("BOOT_D3DLOG") && atoi(getenv("BOOT_D3DLOG"));
+                    if (log) fprintf(stderr, "fx: CTAB %s (set %u reg %u count %u) has no effect parameter\n", (const char *)cb + nm, rs, ri, rc);
+                    continue;
+                }
                 st->ctab[st->nctab++] = (struct CtabEntry){p, rs, ri, rc, ccls};
+                if (getenv("BOOT_D3DLOG") && atoi(getenv("BOOT_D3DLOG")) >= 2)
+                    fprintf(stderr, "fx: CTAB %p %s set %u reg %u count %u class %u -> param %s class %u type %u %ux%u\n", (void *)st,
+                            (const char *)cb + nm, rs, ri, rc, ccls, p->name, p->cls, p->type, p->rows, p->cols);
             }
             return;
         }
@@ -706,10 +716,29 @@ static void upload_ctab(Cpu *c, Effect *fx, State *st, int ps, uint64_t since) {
         int nl = p->elements ? p->nmembers : 1;
         for (int e = 0; e < nl && nreg < nmax; ++e) {
             Param *q = &list[e];
+            if ((q->cls == PC_MATRIX_ROWS || q->cls == PC_MATRIX_COLUMNS) && q->raw_regs) {   // SetRawValue: as written
+                uint32_t nf = q->rows * q->cols, per = nf >= 16 ? 4 : (q->cls == PC_MATRIX_COLUMNS ? q->rows : q->cols);
+                for (uint32_t i = 0; i < nf && nreg < nmax; i += per, ++nreg)
+                    for (uint32_t cc = 0; cc < per && cc < 4; ++cc) memcpy(&regs[nreg][cc], q->data + 4 * (i + cc), 4);
+                continue;
+            }
             if (q->cls == PC_MATRIX_ROWS || q->cls == PC_MATRIX_COLUMNS) {
                 float m[16];
                 get_matrix(q, m, 0);
                 int as_cols = ccls == PC_MATRIX_COLUMNS || (ccls != PC_MATRIX_ROWS && q->cls == PC_MATRIX_COLUMNS);
+                static int log = -1;
+                if (log < 0) log = getenv("BOOT_D3DLOG") && atoi(getenv("BOOT_D3DLOG"));
+                if (log) {                                 // diagnostics: each (parameter, CTAB class) once
+                    static char seen[256][72]; static int nseen;
+                    char key[72]; snprintf(key, sizeof key, "%s/%u/%u", q->name, ccls, rs);
+                    int k = 0;
+                    while (k < nseen && strcmp(seen[k], key)) ++k;
+                    if (k == nseen && nseen < 256) {
+                        snprintf(seen[nseen++], 72, "%s", key);
+                        fprintf(stderr, "fx: upload %s param class %u %ux%u, CTAB class %u set %u reg %u count %u -> %s\n", q->name, q->cls,
+                                q->rows, q->cols, ccls, rs, ri, rc, as_cols ? "columns" : "rows");
+                    }
+                }
                 uint32_t nr = as_cols ? q->cols : q->rows, per = as_cols ? q->rows : q->cols;
                 for (uint32_t r = 0; r < nr && nreg < nmax; ++r, ++nreg)
                     for (uint32_t cc = 0; cc < per && cc < 4; ++cc) regs[nreg][cc] = as_cols ? m[cc * 4 + r] : m[r * 4 + cc];
@@ -963,28 +992,50 @@ static int e_SetValue(Cpu *c) {                // (this, h, data*, bytes)
     if (!p) RET(D3DERR_INVALIDCALL, 4);
     if (p->cls == PC_OBJECT) { if (p->data) set_object(p, M32(arg(c, 2))); RET(D3D_OK, 4); }
     uint32_t n = arg(c, 3) < p->bytes ? arg(c, 3) : p->bytes;
-    if (p->elements) { uint32_t o = 0; for (int i = 0; i < p->nmembers && o < n; ++i) { uint32_t k = p->members[i].bytes; memcpy(p->members[i].data, G + arg(c, 2) + o, k < n - o ? k : n - o); o += k; } }
-    else memcpy(p->data, G + arg(c, 2), n);
+    if (p->elements) { uint32_t o = 0; for (int i = 0; i < p->nmembers && o < n; ++i) { uint32_t k = p->members[i].bytes; memcpy(p->members[i].data, G + arg(c, 2) + o, k < n - o ? k : n - o); p->members[i].raw_regs = 0; o += k; } }
+    else { memcpy(p->data, G + arg(c, 2), n); p->raw_regs = 0; }
     touch(p);
     RET(D3D_OK, 4);
 }
 // d3dx9_34 (ProStreet) additions to ID3DXEffect: SetRawValue(h, data*, byte offset, bytes) writes into the parameter's
 // value as one flat byte range (array elements one after the other); DeleteParameterBlock(block) has nothing to free
 // (parameter blocks are no-ops here).
+// SetRawValue sets "a contiguous range of shader constants with a memory copy": the bytes are what the registers get,
+// whatever the classes of the parameter and of the shader's constant. ProStreet passes its matrices that way, laid out
+// for the registers (WorldViewProj, cmWorldMat, the bone palette...). Taken as a matrix in the parameter's own layout,
+// the upload transposed them for the shaders' column-class constants: every 3D draw exploded towards the screen
+// centre. A matrix written raw keeps its bytes as the register image (raw_regs) until a typed setter replaces it.
+static void raw_write(Param *q, uint32_t at, const uint8_t *src, uint32_t n) {
+    memcpy((uint8_t *)q->data + at, src, n);
+    if (q->cls == PC_MATRIX_ROWS || q->cls == PC_MATRIX_COLUMNS) q->raw_regs = 1;
+}
 static int e_SetRawValue(Cpu *c) {             // (this, h, data*, offset, bytes)
     Param *p = param_of(FX, arg(c, 1));
     if (!p || p->cls == PC_OBJECT) RET(D3DERR_INVALIDCALL, 5);
     uint32_t src = arg(c, 2), off = arg(c, 3), n = arg(c, 4);
+    static int log = -1;
+    if (log < 0) log = getenv("BOOT_D3DLOG") && atoi(getenv("BOOT_D3DLOG"));
+    if (log) {                                         // diagnostics: each parameter's first raw write
+        static char seen[256][64]; static int nseen;
+        int k = 0;
+        while (k < nseen && strcmp(seen[k], p->name)) ++k;
+        if (k == nseen && nseen < 256) {
+            snprintf(seen[nseen++], 64, "%s", p->name);
+            fprintf(stderr, "fx: SetRawValue %s class %u type %u %ux%u elements %u bytes %u | off %u n %u | %g %g %g %g / %g %g %g %g ...\n",
+                    p->name, p->cls, p->type, p->rows, p->cols, p->elements, p->bytes, off, n, MF32(src), MF32(src + 4),
+                    MF32(src + 8), MF32(src + 12), MF32(src + 16), MF32(src + 20), MF32(src + 24), MF32(src + 28));
+        }
+    }
     if (off >= p->bytes) RET(D3D_OK, 5);
     if (n > p->bytes - off) n = p->bytes - off;
     if (p->elements) {
         uint32_t pos = 0;                              // flat position of this member's first byte
         for (int i = 0; i < p->nmembers; ++i) {
             uint32_t k = p->members[i].bytes, a = off > pos ? off : pos, b = off + n < pos + k ? off + n : pos + k;
-            if (a < b) memcpy((uint8_t *)p->members[i].data + (a - pos), G + src + (a - off), b - a);
+            if (a < b) raw_write(&p->members[i], a - pos, G + src + (a - off), b - a);
             pos += k;
         }
-    } else memcpy((uint8_t *)p->data + off, G + src, n);
+    } else raw_write(p, off, G + src, n);
     touch(p);
     RET(D3D_OK, 5);
 }

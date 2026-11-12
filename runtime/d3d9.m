@@ -398,7 +398,7 @@ static uint32_t nmodes(void) {
     if (!nmodes_) {
         for (unsigned i = 0; i < sizeof modes / sizeof *modes; ++i) { adapter_modes[nmodes_][0] = modes[i][0]; adapter_modes[nmodes_++][1] = modes[i][1]; }
         for (int s = 0; s < 6; ++s) {
-            uint32_t w, h, k = 0;
+            uint32_t w = 0, h = 0, k = 0;            // (the ProStreet build's widescreen_mode is a stub that sets nothing)
             widescreen_mode(s, &w, &h);
             while (k < nmodes_ && (adapter_modes[k][0] != w || adapter_modes[k][1] != h)) ++k;
             if (w && k == nmodes_) { adapter_modes[nmodes_][0] = w; adapter_modes[nmodes_++][1] = h; }
@@ -1024,6 +1024,8 @@ static int v_DrawIndexedPrimitive(Cpu *c) { draw(); count_arrest_draw(); render_
 static int v_DrawPrimitiveUP(Cpu *c) { widescreen_drop_quad(c, arg(c, 3), arg(c, 4)); draw(); render_draw(arg(c, 1), arg(c, 2), 0, 0, 0, 0, 0, arg(c, 3), arg(c, 4), 0, 0); dev_bind(&dev.stream[0], 0); envcube_draw_end(); RET(D3D_OK, 5); }
 // (this, type, minIndex, numVertices, primCount, indexData, indexFmt, vertexData, stride)
 static int v_DrawIndexedPrimitiveUP(Cpu *c) { draw(); render_draw(arg(c, 1), arg(c, 4), 1, 0, arg(c, 2), arg(c, 3), 0, arg(c, 7), arg(c, 8), arg(c, 5), arg(c, 6)); dev_bind(&dev.stream[0], 0); dev_bind(&dev.indices, 0); envcube_draw_end(); RET(D3D_OK, 9); }
+// BOOT_D3DLOG=1: the vertex declarations the game creates and its instancing frequencies (diagnostics).
+static int d3d_log(void) { static int on = -1; if (on < 0) on = getenv("BOOT_D3DLOG") && atoi(getenv("BOOT_D3DLOG")); return on; }
 static int v_CreateVertexDeclaration(Cpu *c) { // (this, elements*, pp): elements end with {0xFF, 0, D3DDECLTYPE_UNUSED=17}
     uint32_t e = arg(c, 1), n = 0;
     while (M16(e + 8 * n) != 0xFF && n < 64) ++n;
@@ -1032,6 +1034,13 @@ static int v_CreateVertexDeclaration(Cpu *c) { // (this, elements*, pp): element
     d->decl_mem = galloc(8 * (n + 1));
     memcpy(G + d->decl_mem, G + e, 8 * (n + 1));
     M32(arg(c, 2)) = d->guest;
+    if (d3d_log()) {                    // stream.offset type method usage.index for each element
+        fprintf(stderr, "d3d: decl %08X:", d->guest);
+        for (uint32_t i = 0; i < n; ++i)
+            fprintf(stderr, " %u.%u t%u m%u u%u.%u", M16(e + 8 * i), M16(e + 8 * i + 2), G[e + 8 * i + 4],
+                    G[e + 8 * i + 5], G[e + 8 * i + 6], G[e + 8 * i + 7]);
+        fprintf(stderr, "\n");
+    }
     RET(D3D_OK, 3);
 }
 static int v_SetVertexDeclaration(Cpu *c) { dev.decl = arg(c, 1); dev.fvf = 0; RET(D3D_OK, 2); }
@@ -1055,11 +1064,25 @@ static int v_SetVertexShader(Cpu *c) { dev.vs = arg(c, 1); RET(D3D_OK, 2); }
 static int v_GetVertexShader(Cpu *c) { M32(arg(c, 1)) = dev.vs; if (dev.vs) ++obj(dev.vs)->refs; RET(D3D_OK, 2); }
 static int v_SetPixelShader(Cpu *c) { dev.ps = arg(c, 1); RET(D3D_OK, 2); }
 static int v_GetPixelShader(Cpu *c) { M32(arg(c, 1)) = dev.ps; if (dev.ps) ++obj(dev.ps)->refs; RET(D3D_OK, 2); }
+// BOOT_D3DLOG=1: who sets float constant registers to 255 (diagnostics for colours left in 0-255).
+static void const_log(const char *name, Cpu *c, uint32_t s, uint32_t n) {
+    static uint64_t seen[64]; static int nseen;
+    for (uint32_t i = 0; i < n; ++i)
+        if (MF32(arg(c, 2) + 16 * i) == 255.0f) {
+            uint64_t key = (uint64_t)(s + i) << 32 | M32(c->esp) | (uint64_t)(name[0] == 'P') << 40;
+            int k = 0;
+            while (k < nseen && seen[k] != key) ++k;
+            if (k < nseen || nseen == 64) continue;
+            seen[nseen++] = key;
+            fprintf(stderr, "d3d: Set%s c%u = 255 (%u registers from c%u) caller %08X\n", name, s + i, n, s, M32(c->esp));
+        }
+}
 #define CONST_FN(name, arr, lim, w)                                                                  \
     static int v_Set##name(Cpu *c) {                                                                 \
         uint32_t s = arg(c, 1), n = arg(c, 3);                                                       \
         if (s + n > lim) RET(D3DERR_INVALIDCALL, 4);                                                 \
         memcpy(&dev.arr[s], G + arg(c, 2), (size_t)n * (w));                                         \
+        if (d3d_log()) const_log(#name, c, s, n);                                                    \
         if (!++dev.ver_##arr) dev.ver_##arr = 1;                                                     \
         RET(D3D_OK, 4);                                                                              \
     }                                                                                                \
@@ -1088,7 +1111,14 @@ static int v_GetStreamSource(Cpu *c) {
     if (dev.stream[s]) obj_addref(obj(dev.stream[s]));
     RET(D3D_OK, 5);
 }
-static int v_SetStreamSourceFreq(Cpu *c) { if (arg(c, 1) < 16) dev.stream_freq[arg(c, 1)] = arg(c, 2); RET(D3D_OK, 3); }
+static int v_SetStreamSourceFreq(Cpu *c) {
+    if (d3d_log() && arg(c, 2) != 1) {
+        static int shown;
+        if (shown++ < 40) fprintf(stderr, "d3d: SetStreamSourceFreq(%u, %08X)\n", arg(c, 1), arg(c, 2));
+    }
+    if (arg(c, 1) < 16) dev.stream_freq[arg(c, 1)] = arg(c, 2);
+    RET(D3D_OK, 3);
+}
 static int v_GetStreamSourceFreq(Cpu *c) { M32(arg(c, 2)) = arg(c, 1) < 16 ? dev.stream_freq[arg(c, 1)] : 1; RET(D3D_OK, 3); }
 static int v_SetIndices(Cpu *c) { dev_bind(&dev.indices, arg(c, 1)); RET(D3D_OK, 2); }
 static int v_GetIndices(Cpu *c) { M32(arg(c, 1)) = dev.indices; if (dev.indices) obj_addref(obj(dev.indices)); RET(D3D_OK, 2); }
