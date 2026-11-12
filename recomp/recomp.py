@@ -181,6 +181,19 @@ class Recompiler:
         (ProStreet, server.dll, synthetic code) is translated as is. Moving them into an MW game profile is Phase 3."""
         return self.calls and getattr(self.pe, "fingerprint", None) == SPEED_EXE_FINGERPRINT
 
+    def lua_protected_frame(self):
+        """(entry, continuation) of the game's Lua protected call (luaD_rawrunprotected: setjmp, call, and the code
+        after a longjmp), or None. The function is split so the host can resume its continuation (boot.c
+        host_lua_protected / host_lua_resume). MW: 006069C0 / 006069E8; ProStreet demo: 006C3E60 / 006C3EAB."""
+        if not self.calls:
+            return None
+        fp = getattr(self.pe, "fingerprint", None)
+        if fp == SPEED_EXE_FINGERPRINT:
+            return (0x006069C0, 0x006069E8)
+        if fp == exe_fingerprint.PROFILES["ps_demo"]["fingerprint"]:
+            return (0x006C3E60, 0x006C3EAB)
+        return None
+
     # ---------- operands ----------
     def ea(self, insn, op):
         m = op.mem
@@ -464,10 +477,11 @@ class Recompiler:
                          else "uint8_t cf = 0, pf = 0, af = 0, zf = 0, sf = 0, of = 0;") + " (void)cf; (void)pf; (void)af; (void)zf; (void)sf; (void)of;",
                 "    ABI_SAVE();"]
         code = "\n".join(head + body + ["}"])
-        if self.mw_patches and addr == 0x006069C0:
+        lua = self.lua_protected_frame()
+        if lua and addr == lua[0]:
             assert insn_fingerprint(self.pe.read(addr, 6)) == "2aab9ffc288165d6", "Lua protected frame changed"
             callees = self.callees.copy()
-            resume, why = self.translate(0x006069E8, limit, name="lua_protected_resume")
+            resume, why = self.translate(lua[1], limit, name="lua_protected_resume")
             if resume is None:
                 return None, "Lua continuation: " + why
             self.callees |= callees

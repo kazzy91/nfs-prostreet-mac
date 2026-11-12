@@ -1,7 +1,10 @@
 """Writes runtime/ps_stubs.m: "feature off" definitions for the MW feature functions and variables the ProStreet core
 runtime still references (runtime/build_ps.sh links no MW feature file).
 
-    python3 -I runtime/gen_ps_stubs.py <undefined-symbols.txt>     (one symbol per line, from a failed link of build_ps.sh)
+    python3 -I runtime/gen_ps_stubs.py runtime/ps_stubs.txt     (one symbol per line; '#' comments)
+
+runtime/ps_stubs.txt lists them (first taken from a failed link of build_ps.sh). When a ProStreet file implements one,
+its symbol leaves the list and the file is regenerated.
 
 Each symbol's declaration is taken from the runtime headers, else from a declaration inside the linked sources, and
 the stub keeps that exact signature: functions return a zero value of their type (0, NULL, nil, false, an empty
@@ -32,7 +35,6 @@ MANUAL = {    # symbol -> full definition, for what the parser can't find (comma
     "materials_flake_tint": "int materials_flake_tint;  // user32.m (local extern)",
     "materials_flake_test": "void materials_flake_test(int tint, int force) {}  // user32.m",
     "materials_set_car_flake": "void materials_set_car_flake(int x360) {}  // user32.m",
-    "pacing_lockstep_now": "int pacing_lockstep_now(void) { return 0; }  // user32.m (pacing.c is MW's; ProStreet's comes in Phase 7)",
     "report_init": "void report_init(void) {}  // boot.c (report.m isn't linked yet)",
     # registry.c answers the game's Language value from this (settings_port.c is MW's settings page)
     "settings_game_language": 'const char *settings_game_language(void) { return "English US"; }  // registry.c',

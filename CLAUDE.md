@@ -169,7 +169,15 @@ Open for Phase 6: frame pacing (several hundred fps), keys the game turns into s
   format against the FFmpeg path).
 - **Exit:** boots to the first front-end screen without dying; logs clean of unknown imports.
 
-### Phase 6: menus
+### Phase 6: menus (in progress)
+Status (2026-11-12): frame pacing for ProStreet (`runtime/ps_pacing.c`): Present waits for the next frame slot,
+60 fps by default (`NFS_PS_FPS`, 0 = uncapped; the game asks for immediate presents and steps its sim by measured
+time); measured 300 frames per 5.0 s. The stub list is committed (`runtime/ps_stubs.txt`, regenerate with
+`runtime/gen_ps_stubs.py`). Return on the demo's event screen starts the race load: `_setjmp3`/`longjmp` are in the
+CRT shim (`runtime/msvcr.c`), and the translator's Lua protected-frame patch is per game (`Recompiler.lua_protected_frame`:
+MW `006069C0`/`006069E8`, ProStreet `006C3E60`/`006C3EAB`, same guest code), resumed by `boot.c` `host_lua_resume`. The
+load now stays on the animated LOADING screen past 40 s: the main loop runs, a worker thread (`0085C630`) waits in
+`008B63F0` (open). Next: why the load doesn't finish, menus and options, why DEMO_MUSIC_LEGAL never ends.
 - Front end renders correctly: ProStreet's shaders through `host/shaders`, the new d3dx9_34 functions, missing D3D9
   paths (`ColorFill`, `UpdateSurface` if used; `GetRenderTargetData` is implemented but untested on a real frame).
 - Keyboard/mouse via DirectInput, then controllers. DirectSound audio and music. Profiles/saves in `USERDATA`.

@@ -139,9 +139,6 @@ void mirror_flare_info(int *type, float *intensity) {}  // render.m
 int movies_playing(void) { return (int){0}; }  // user32.m
 int osk_pad(int port, uint32_t buttons, int up, int down, int left, int right, float lx, float ly, int connected, int xbox) { return (int){0}; }  // onscreen_keyboard.h
 int osk_visible(void) { return (int){0}; }  // onscreen_keyboard.h
-int pacing_lockstep_now(void) { return 0; }  // user32.m (pacing.c is MW's; ProStreet's comes in Phase 7)
-void pacing_present(void) {}  // d3d9.m
-int pacing_sim_hz(void) { return (int){0}; }  // overlay.m
 int padbind_edited_set(void) { return (int){0}; }  // host.h
 void padbind_sync(Cpu *c) {}  // host.h
 void padbind_test_player_triggers(void) {}  // user32.m

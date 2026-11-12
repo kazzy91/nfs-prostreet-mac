@@ -20,7 +20,7 @@ FF=../third_party/ffmpeg/lib
 CORE="boot.c app.m heap.c d3dx.c d3dx_effect.c d3dx_tex.c readback.c threads.c user32.m d3d9.m render.m
       render_target.m render_query.m render_present.m render_thread.m render_post.m pipeline_cache.m dsound.c dinput.c
       ws2_32.c msvcr.c win32_more.c registry.c interp.c diag.c imports_ps.c
-      ps_boot.c"
+      ps_boot.c ps_pacing.c"
 # app shell and render infrastructure without MW addresses (settings store, second-module loader, upscaling, GPU
 # timing, controller rumble/haptics, overlay, probe)
 SHELL_FILES="settings.c server_loader.c render_upscale_route.m render_metalfx_spatial.m alpha_to_coverage.c gpupass.m

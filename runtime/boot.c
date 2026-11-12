@@ -175,9 +175,10 @@ void host_lua_protected(Cpu *c, void (*body)(Cpu *), void (*resume)(Cpu *)) {
 }
 void host_lua_resume(Cpu *c, uint32_t target) {
 #ifdef NFS_GAME_PS
-    (void)c; (void)target; return;        // MW's Lua protected-call resume address
-#endif
+    if (target != 0x006C3EABu) return;    // ProStreet: msvcr.c's longjmp comes here with the continuation address
+#else
     if (target != 0x006069E8u) return;
+#endif
     for (LuaProtectedFrame *p = lua_protected_frame; p; p = p->prev) {
         if (p->cpu != c || p->buffer != c->edx || c->esp != M32(p->buffer + 16) + 4) continue;
         // The original CRT longjmp has restored guest registers and run its SEH

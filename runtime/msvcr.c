@@ -923,6 +923,34 @@ static uint32_t crt_fopen(const char *path, const char *mode) {
     return f;
 }
 
+// ---- setjmp / longjmp (Lua's protected calls; MW's CRT was translated code, ProStreet imports them) ----
+// _setjmp3(buf, n, ...) keeps MSVC's layout: ebp, ebx, edi, esi, esp (at the return address), the return address,
+// the SEH registration (fs:[0]), the try level and the 'VC20' cookie. longjmp(buf, v) restores them and hands the
+// guest's continuation to the host: only a known protected frame can be resumed (boot.c host_lua_resume unwinds the
+// native frames of the abandoned calls and runs the translated continuation); any other target stops by name.
+void host_lua_resume(Cpu *c, uint32_t target);
+static int crt_setjmp(Cpu *c, const char *fn) {
+    if (!strcmp(fn, "_setjmp3")) {
+        uint32_t b = arg(c, 0);
+        M32(b) = c->ebp; M32(b + 4) = c->ebx; M32(b + 8) = c->edi; M32(b + 12) = c->esi;
+        M32(b + 16) = c->esp; M32(b + 20) = M32(c->esp); M32(b + 24) = M32(c->fs_base);
+        M32(b + 28) = 0xFFFFFFFFu; M32(b + 32) = 0x56433230u;            // try level -1, 'VC20'
+        CRET(0);
+    }
+    if (!strcmp(fn, "longjmp")) {
+        uint32_t b = arg(c, 0), v = arg(c, 1), target = M32(b + 20);
+        c->ebp = M32(b); c->ebx = M32(b + 4); c->edi = M32(b + 8); c->esi = M32(b + 12);
+        c->esp = M32(b + 16) + 4;                                            // as if _setjmp3 had just returned
+        M32(c->fs_base) = M32(b + 24);
+        c->eax = v ? v : 1;
+        c->edx = b;
+        host_lua_resume(c, target);                                         // doesn't return for a known frame
+        fprintf(stderr, "boot: longjmp to %08X, which isn't a known protected frame\n", target);
+        return 0;                                                           // host_import stops with the name
+    }
+    return 0;
+}
+
 static int crt_files(Cpu *c, const char *fn) {
     // ---- low-level I/O ----
     if (!strcmp(fn, "_open") || !strcmp(fn, "?_open@@YAHPBDHH@Z")) CRET((uint32_t)crt_open(gs(arg(c, 0)), arg(c, 1)));
@@ -1136,5 +1164,5 @@ static int crt_threads(Cpu *c, const char *fn) {
 }
 
 int win32_msvcr(Cpu *c, const char *fn) {
-    return crt_mem_str(c, fn) || crt_math(c, fn) || crt_misc(c, fn) || crt_files(c, fn) || crt_time(c, fn) || crt_threads(c, fn);
+    return crt_mem_str(c, fn) || crt_math(c, fn) || crt_misc(c, fn) || crt_setjmp(c, fn) || crt_files(c, fn) || crt_time(c, fn) || crt_threads(c, fn);
 }
