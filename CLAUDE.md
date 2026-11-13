@@ -56,8 +56,10 @@ the existing host layer: Win32 subset, D3D9 → Metal, DirectSound → CoreAudio
   `tools/asan_off/`, which drops only `address` from `-fsanitize` (UBSan stays; `runtime/asan_off_test.py`). The
   ProStreet tests in `runtime/` and `recomp/` pass here; MW-only tests that need MW's generated inputs (`gen/*.inc`,
   `funcs.h` from `speed.exe`) fail in this checkout, as expected until Phase 4 takes them out of the ProStreet build.
-- Early Setup DMG (`tools/ps_setup/`, `docs/ps-setup.md`): `tools/ps_setup/build_dmg.sh` makes a ~0.5 MB Setup app
-  that checks the player's `nfs.exe` / game folder / disc image and explains the verdict; it can't build the game yet.
+- Setup DMG (`tools/ps_setup/`, `docs/ps-setup.md`): `tools/ps_setup/build_dmg.sh [--worktree]` makes an ~18 MB Setup
+  app that checks the player's exe and, for EA's demo install, builds the game on their Mac like MW's Setup
+  (recompile, FFmpeg, host libraries, runtime, signed `NFS ProStreet Native.app` in Applications, Play). It carries
+  the source (git archive), capstone and FFmpeg's tarball, and runs on the Command Line Tools' Python: no downloads.
   MW's Setup (`tools/installer/`) is untouched.
 - `.gitignore` blocks game executables/DLLs/disc images, game data formats, a game folder dropped into the checkout,
   build output (`recomp/out/`, `**/build/`, `*.o`, `*.a`, app bundles), dumps and `USERDATA/`. It's a safety net:
@@ -221,6 +223,5 @@ physical keyboard and mouse on purpose.
   without errors.
 
 ### Later / out of scope
-Grow the early Setup (`tools/ps_setup/`) into the real one (build stages after the check) and the game app bundle,
-F10 settings menu, controller prompts, widescreen/FOV. Online play (EA servers are gone,
+Setup polish (an app icon, notarization, a build cache keyed like MW's), F10 settings menu, controller prompts, widescreen/FOV. Online play (EA servers are gone,
 PunkBuster), X360 features and the Windows host (`runtime/win`) are out of scope.

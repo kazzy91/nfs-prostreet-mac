@@ -17,6 +17,15 @@ AU=../host/audio/build
 FF=../third_party/ffmpeg/lib
 [ -f "$AU/libhostaudio.a" ] && [ -f "$AU/libmedia.a" ] || { echo "build_ps: run host/audio/build.sh lib first" >&2; exit 1; }
 [ -f "$FF/libavcodec.a" ] || { echo "build_ps: FFmpeg missing; run media/build_ffmpeg.sh first" >&2; exit 1; }
+# MW's generated tables (runtime/gen/, tools/gen_tables.py, from MW's files) aren't part of this build: the two headers
+# the core files include get their "no X360" versions (zeros, the X360 features off), made here from the generators'
+# own stubs, so a fresh checkout (or Setup's work copy) builds without MW's files. A checkout that has runtime/gen/
+# keeps using it (quoted includes look next to the including file first); its no-X360 copies are the same.
+PY="${TOOLS_PY:-/usr/bin/python3}"
+mkdir -p "$O/inc/gen"
+"$PY" -I ../tools_snapshot/x360_shader_lits.py --stub --out "$O/inc/gen/x360_shader_lits.inc" >/dev/null
+(cd ../tools_snapshot && "$PY" -I -c "import sys; sys.path.insert(0, '.'); import pubtables_gen as g
+open(sys.argv[1], 'w').write(g.ENGINE_STUB)" "$OLDPWD/$O/inc/gen/x360_engine.inc")
 CORE="boot.c app.m heap.c d3dx.c d3dx_effect.c d3dx_tex.c readback.c threads.c user32.m d3d9.m render.m
       render_target.m render_query.m render_present.m render_thread.m render_post.m pipeline_cache.m dsound.c dinput.c
       ws2_32.c msvcr.c win32_more.c registry.c interp.c diag.c imports_ps.c
@@ -28,7 +37,7 @@ SHELL_FILES="settings.c server_loader.c render_upscale_route.m render_metalfx_sp
 # "feature off" definitions for the MW feature code the files above still call (runtime/gen_ps_stubs.py)
 STUBS="ps_stubs.m"
 # shellcheck disable=SC2086
-clang -O1 -g -w -DNFS_GAME_PS=1 -I "$O" -I ../recomp -fobjc-arc $CORE $SHELL_FILES $STUBS "$O/nfs.a" \
+clang -O1 -g -w -DNFS_GAME_PS=1 -I "$O" -I "$O/inc" -I ../recomp -fobjc-arc $CORE $SHELL_FILES $STUBS "$O/nfs.a" \
     "$AU/libhostaudio.a" "$AU/libmedia.a" "$SM" \
     "$FF/libavformat.a" "$FF/libavcodec.a" "$FF/libswscale.a" "$FF/libswresample.a" "$FF/libavutil.a" \
     -lc++ -lz -framework AudioToolbox -framework CoreAudio -framework CoreFoundation -framework Cocoa \

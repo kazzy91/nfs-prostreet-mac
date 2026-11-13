@@ -39,8 +39,8 @@ DRM = {"SecuROM", "StarForce", "TAGES", "SafeDisc", "LaserLock", "Steam DRM", "C
 
 TEXT = {
     "supported": ("This is EA's ProStreet demo executable",
-                  "Plain code, signed by Electronic Arts and unchanged since: exactly the build the port targets. This "
-                  "early Setup can't build the game yet: translating ProStreet's code to the Mac is still being worked on."),
+                  "Plain code, signed by Electronic Arts and unchanged since: exactly the build the port targets. Setup "
+                  "can build the game from it."),
     "plain": ("This nfs.exe is plain code, signed by EA",
               "It has no copy protection or packing and is exactly what EA signed, but it isn't the build the port "
               "targets (EA's ProStreet demo release executable)."),
@@ -58,8 +58,8 @@ TEXT = {
                                       "your ProStreet disc image (.iso)."),
     "not_pe": ("This isn't a Windows game executable", "Choose ProStreet's nfs.exe."),
 }
-NEXT = ("Building NFS ProStreet Native isn't available in this early Setup. When it is, Setup will check your nfs.exe "
-        "the same way, then build the game on your Mac.")
+NEXT = ("To build NFS ProStreet Native, choose the folder EA's ProStreet demo is installed in (it holds nfsdemo.exe "
+        "and the demo's data), then Build and Install.")
 
 
 def find_exe(folder):
@@ -67,7 +67,7 @@ def find_exe(folder):
         if top[len(folder):].count(os.sep) >= 3:
             dirs[:] = []
         for f in files:
-            if f.lower() == "nfs.exe":
+            if f.lower() in ("nfs.exe", "nfsdemo.exe"):    # EA's demo installer names it nfsdemo.exe
                 return os.path.join(top, f)
         dirs.sort()
     return None
